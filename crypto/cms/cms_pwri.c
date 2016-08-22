@@ -1,55 +1,10 @@
-/* crypto/cms/cms_pwri.c */
 /*
- * Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
- * project.
- */
-/* ====================================================================
- * Copyright (c) 2009 The OpenSSL Project.  All rights reserved.
+ * Copyright 2009-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include "internal/cryptlib.h"
@@ -90,7 +45,7 @@ CMS_RecipientInfo *CMS_add0_recipient_password(CMS_ContentInfo *cms,
     CMS_RecipientInfo *ri = NULL;
     CMS_EnvelopedData *env;
     CMS_PasswordRecipientInfo *pwri;
-    EVP_CIPHER_CTX ctx;
+    EVP_CIPHER_CTX *ctx = NULL;
     X509_ALGOR *encalg = NULL;
     unsigned char iv[EVP_MAX_IV_LENGTH];
     int ivlen;
@@ -124,19 +79,19 @@ CMS_RecipientInfo *CMS_add0_recipient_password(CMS_ContentInfo *cms,
     if (encalg == NULL) {
         goto merr;
     }
-    EVP_CIPHER_CTX_init(&ctx);
+    ctx = EVP_CIPHER_CTX_new();
 
-    if (EVP_EncryptInit_ex(&ctx, kekciph, NULL, NULL, NULL) <= 0) {
+    if (EVP_EncryptInit_ex(ctx, kekciph, NULL, NULL, NULL) <= 0) {
         CMSerr(CMS_F_CMS_ADD0_RECIPIENT_PASSWORD, ERR_R_EVP_LIB);
         goto err;
     }
 
-    ivlen = EVP_CIPHER_CTX_iv_length(&ctx);
+    ivlen = EVP_CIPHER_CTX_iv_length(ctx);
 
     if (ivlen > 0) {
         if (RAND_bytes(iv, ivlen) <= 0)
             goto err;
-        if (EVP_EncryptInit_ex(&ctx, NULL, NULL, NULL, iv) <= 0) {
+        if (EVP_EncryptInit_ex(ctx, NULL, NULL, NULL, iv) <= 0) {
             CMSerr(CMS_F_CMS_ADD0_RECIPIENT_PASSWORD, ERR_R_EVP_LIB);
             goto err;
         }
@@ -145,16 +100,17 @@ CMS_RecipientInfo *CMS_add0_recipient_password(CMS_ContentInfo *cms,
             CMSerr(CMS_F_CMS_ADD0_RECIPIENT_PASSWORD, ERR_R_MALLOC_FAILURE);
             goto err;
         }
-        if (EVP_CIPHER_param_to_asn1(&ctx, encalg->parameter) <= 0) {
+        if (EVP_CIPHER_param_to_asn1(ctx, encalg->parameter) <= 0) {
             CMSerr(CMS_F_CMS_ADD0_RECIPIENT_PASSWORD,
                    CMS_R_CIPHER_PARAMETER_INITIALISATION_ERROR);
             goto err;
         }
     }
 
-    encalg->algorithm = OBJ_nid2obj(EVP_CIPHER_CTX_type(&ctx));
+    encalg->algorithm = OBJ_nid2obj(EVP_CIPHER_CTX_type(ctx));
 
-    EVP_CIPHER_CTX_cleanup(&ctx);
+    EVP_CIPHER_CTX_free(ctx);
+    ctx = NULL;
 
     /* Initialize recipient info */
     ri = M_ASN1_new_of(CMS_RecipientInfo);
@@ -204,7 +160,7 @@ CMS_RecipientInfo *CMS_add0_recipient_password(CMS_ContentInfo *cms,
  merr:
     CMSerr(CMS_F_CMS_ADD0_RECIPIENT_PASSWORD, ERR_R_MALLOC_FAILURE);
  err:
-    EVP_CIPHER_CTX_cleanup(&ctx);
+    EVP_CIPHER_CTX_free(ctx);
     if (ri)
         M_ASN1_free_of(ri, CMS_RecipientInfo);
     X509_ALGOR_free(encalg);
@@ -323,7 +279,7 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
     CMS_PasswordRecipientInfo *pwri;
     int r = 0;
     X509_ALGOR *algtmp, *kekalg = NULL;
-    EVP_CIPHER_CTX kekctx;
+    EVP_CIPHER_CTX *kekctx = NULL;
     const EVP_CIPHER *kekcipher;
     unsigned char *key = NULL;
     size_t keylen;
@@ -331,7 +287,6 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
     ec = cms->d.envelopedData->encryptedContentInfo;
 
     pwri = ri->d.pwri;
-    EVP_CIPHER_CTX_init(&kekctx);
 
     if (!pwri->pass) {
         CMSerr(CMS_F_CMS_RECIPIENTINFO_PWRI_CRYPT, CMS_R_NO_PASSWORD);
@@ -358,14 +313,19 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
 
     if (!kekcipher) {
         CMSerr(CMS_F_CMS_RECIPIENTINFO_PWRI_CRYPT, CMS_R_UNKNOWN_CIPHER);
-        goto err;
+        return 0;
     }
 
+    kekctx = EVP_CIPHER_CTX_new();
+    if (kekctx == NULL) {
+        CMSerr(CMS_F_CMS_RECIPIENTINFO_PWRI_CRYPT, ERR_R_MALLOC_FAILURE);
+        return 0;
+    }
     /* Fixup cipher based on AlgorithmIdentifier to set IV etc */
-    if (!EVP_CipherInit_ex(&kekctx, kekcipher, NULL, NULL, NULL, en_de))
+    if (!EVP_CipherInit_ex(kekctx, kekcipher, NULL, NULL, NULL, en_de))
         goto err;
-    EVP_CIPHER_CTX_set_padding(&kekctx, 0);
-    if (EVP_CIPHER_asn1_to_param(&kekctx, kekalg->parameter) < 0) {
+    EVP_CIPHER_CTX_set_padding(kekctx, 0);
+    if (EVP_CIPHER_asn1_to_param(kekctx, kekalg->parameter) < 0) {
         CMSerr(CMS_F_CMS_RECIPIENTINFO_PWRI_CRYPT,
                CMS_R_CIPHER_PARAMETER_INITIALISATION_ERROR);
         goto err;
@@ -377,7 +337,7 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
 
     if (EVP_PBE_CipherInit(algtmp->algorithm,
                            (char *)pwri->pass, pwri->passlen,
-                           algtmp->parameter, &kekctx, en_de) < 0) {
+                           algtmp->parameter, kekctx, en_de) < 0) {
         CMSerr(CMS_F_CMS_RECIPIENTINFO_PWRI_CRYPT, ERR_R_EVP_LIB);
         goto err;
     }
@@ -386,7 +346,7 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
 
     if (en_de) {
 
-        if (!kek_wrap_key(NULL, &keylen, ec->key, ec->keylen, &kekctx))
+        if (!kek_wrap_key(NULL, &keylen, ec->key, ec->keylen, kekctx))
             goto err;
 
         key = OPENSSL_malloc(keylen);
@@ -394,7 +354,7 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
         if (key == NULL)
             goto err;
 
-        if (!kek_wrap_key(key, &keylen, ec->key, ec->keylen, &kekctx))
+        if (!kek_wrap_key(key, &keylen, ec->key, ec->keylen, kekctx))
             goto err;
         pwri->encryptedKey->data = key;
         pwri->encryptedKey->length = keylen;
@@ -407,7 +367,7 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
         }
         if (!kek_unwrap_key(key, &keylen,
                             pwri->encryptedKey->data,
-                            pwri->encryptedKey->length, &kekctx)) {
+                            pwri->encryptedKey->length, kekctx)) {
             CMSerr(CMS_F_CMS_RECIPIENTINFO_PWRI_CRYPT, CMS_R_UNWRAP_FAILURE);
             goto err;
         }
@@ -421,7 +381,7 @@ int cms_RecipientInfo_pwri_crypt(CMS_ContentInfo *cms, CMS_RecipientInfo *ri,
 
  err:
 
-    EVP_CIPHER_CTX_cleanup(&kekctx);
+    EVP_CIPHER_CTX_free(kekctx);
 
     if (!r)
         OPENSSL_free(key);

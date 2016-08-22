@@ -1,63 +1,17 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
-#include <openssl/opensslconf.h> /* for OPENSSL_NO_DSA */
+#include <openssl/opensslconf.h>
+#ifdef OPENSSL_NO_DSA
+NON_EMPTY_TRANSLATION_UNIT
+#else
 
-#ifndef OPENSSL_NO_DSA
 # include <stdio.h>
 # include <stdlib.h>
 # include <time.h>
@@ -86,7 +40,7 @@ static int dsa_cb(int p, int n, BN_GENCB *cb);
 typedef enum OPTION_choice {
     OPT_ERR = -1, OPT_EOF = 0, OPT_HELP,
     OPT_INFORM, OPT_OUTFORM, OPT_IN, OPT_OUT, OPT_TEXT, OPT_C,
-    OPT_NOOUT, OPT_GENKEY, OPT_RAND, OPT_NON_FIPS_ALLOW, OPT_ENGINE,
+    OPT_NOOUT, OPT_GENKEY, OPT_RAND, OPT_ENGINE,
     OPT_TIMEBOMB
 } OPTION_CHOICE;
 
@@ -101,7 +55,6 @@ OPTIONS dsaparam_options[] = {
     {"noout", OPT_NOOUT, '-', "No output"},
     {"genkey", OPT_GENKEY, '-', "Generate a DSA key"},
     {"rand", OPT_RAND, 's', "Files to use for random number input"},
-    {"non-fips-allow", OPT_NON_FIPS_ALLOW, '-'},
 # ifdef GENCB_TEST
     {"timebomb", OPT_TIMEBOMB, 'p', "Interrupt keygen after 'pnum' seconds"},
 # endif
@@ -116,7 +69,7 @@ int dsaparam_main(int argc, char **argv)
     DSA *dsa = NULL;
     BIO *in = NULL, *out = NULL;
     BN_GENCB *cb = NULL;
-    int numbits = -1, num = 0, genkey = 0, need_rand = 0, non_fips_allow = 0;
+    int numbits = -1, num = 0, genkey = 0, need_rand = 0;
     int informat = FORMAT_PEM, outformat = FORMAT_PEM, noout = 0, C = 0;
     int ret = 1, i, text = 0, private = 0;
 # ifdef GENCB_TEST
@@ -175,16 +128,13 @@ int dsaparam_main(int argc, char **argv)
         case OPT_NOOUT:
             noout = 1;
             break;
-        case OPT_NON_FIPS_ALLOW:
-            non_fips_allow = 1;
-            break;
         }
     }
     argc = opt_num_rest();
     argv = opt_rest();
 
     if (argc == 1) {
-        if (!opt_int(argv[0], &num))
+        if (!opt_int(argv[0], &num) || num < 0)
             goto end;
         /* generate a key */
         numbits = num;
@@ -219,8 +169,6 @@ int dsaparam_main(int argc, char **argv)
             BIO_printf(bio_err, "Error allocating DSA object\n");
             goto end;
         }
-        if (non_fips_allow)
-            dsa->flags |= DSA_FLAG_NON_FIPS_ALLOW;
         BIO_printf(bio_err, "Generating DSA parameters, %d bit long prime\n",
                    num);
         BIO_printf(bio_err, "This could take some time\n");
@@ -267,14 +215,20 @@ int dsaparam_main(int argc, char **argv)
     }
 
     if (C) {
-        int len = BN_num_bytes(dsa->p);
-        int bits_p = BN_num_bits(dsa->p);
-        unsigned char *data = app_malloc(len + 20, "BN space");
+        const BIGNUM *p = NULL, *q = NULL, *g = NULL;
+        unsigned char *data;
+        int len, bits_p;
+
+        DSA_get0_pqg(dsa, &p, &q, &g);
+        len = BN_num_bytes(p);
+        bits_p = BN_num_bits(p);
+
+        data = app_malloc(len + 20, "BN space");
 
         BIO_printf(bio_out, "DSA *get_dsa%d()\n{\n", bits_p);
-        print_bignum_var(bio_out, dsa->p, "dsap", len, data);
-        print_bignum_var(bio_out, dsa->q, "dsaq", len, data);
-        print_bignum_var(bio_out, dsa->g, "dsag", len, data);
+        print_bignum_var(bio_out, p, "dsap", len, data);
+        print_bignum_var(bio_out, q, "dsaq", len, data);
+        print_bignum_var(bio_out, g, "dsag", len, data);
         BIO_printf(bio_out, "    DSA *dsa = DSA_new();\n"
                             "\n");
         BIO_printf(bio_out, "    if (dsa == NULL)\n"
@@ -290,6 +244,7 @@ int dsaparam_main(int argc, char **argv)
                             "        return NULL;\n"
                             "    }\n"
                             "    return(dsa);\n}\n");
+        OPENSSL_free(data);
     }
 
     if (!noout) {
@@ -309,8 +264,6 @@ int dsaparam_main(int argc, char **argv)
         assert(need_rand);
         if ((dsakey = DSAparams_dup(dsa)) == NULL)
             goto end;
-        if (non_fips_allow)
-            dsakey->flags |= DSA_FLAG_NON_FIPS_ALLOW;
         if (!DSA_generate_key(dsakey)) {
             ERR_print_errors(bio_err);
             DSA_free(dsakey);
@@ -355,10 +308,4 @@ static int dsa_cb(int p, int n, BN_GENCB *cb)
 # endif
     return 1;
 }
-#else                           /* !OPENSSL_NO_DSA */
-
-# if PEDANTIC
-static void *dummy = &dummy;
-# endif
-
 #endif

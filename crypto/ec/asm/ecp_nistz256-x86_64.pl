@@ -1,4 +1,11 @@
-#!/usr/bin/env perl
+#! /usr/bin/env perl
+# Copyright 2014-2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 
 ##############################################################################
 #                                                                            #
@@ -60,7 +67,7 @@ $0 =~ m/(.*[\/\\])[^\/\\]+$/; $dir=$1;
 ( $xlate="${dir}../../perlasm/x86_64-xlate.pl" and -f $xlate) or
 die "can't locate x86_64-xlate.pl";
 
-open OUT,"| \"$^X\" $xlate $flavour $output";
+open OUT,"| \"$^X\" \"$xlate\" $flavour \"$output\"";
 *STDOUT=*OUT;
 
 if (`$ENV{CC} -Wa,-v -c -o /dev/null -x assembler /dev/null 2>&1`
@@ -81,7 +88,7 @@ if (!$addx && $win64 && ($flavour =~ /masm/ || $ENV{ASM} =~ /ml64/) &&
 	$addx = ($1>=12);
 }
 
-if (!$addx && `$ENV{CC} -v 2>&1` =~ /((?:^clang|LLVM) version|based on LLVM) ([3-9])\.([0-9]+)/) {
+if (!$addx && `$ENV{CC} -v 2>&1` =~ /((?:^clang|LLVM) version|.*based on LLVM) ([3-9])\.([0-9]+)/) {
 	my $ver = $2 + $3/100.0;	# 3.1->3.01, 3.10->3.10
 	$avx = ($ver>=3.0) + ($ver>=3.01);
 	$addx = ($ver>=3.03);
@@ -2044,6 +2051,7 @@ $code.=<<___;
 	push	%r15
 	sub	\$32*5+8, %rsp
 
+.Lpoint_double_shortcut$x:
 	movdqu	0x00($a_ptr), %xmm0		# copy	*(P256_POINT *)$a_ptr.x
 	mov	$a_ptr, $b_ptr			# backup copy
 	movdqu	0x10($a_ptr), %xmm1
@@ -2334,6 +2342,7 @@ $code.=<<___;
 	 mov	0x40+8*1($b_ptr), $acc6
 	 mov	0x40+8*2($b_ptr), $acc7
 	 mov	0x40+8*3($b_ptr), $acc0
+	movq	$b_ptr, %xmm1
 
 	lea	0x40-$bias($b_ptr), $a_ptr
 	lea	$Z1sqr(%rsp), $r_ptr		# Z1^2
@@ -2389,7 +2398,7 @@ $code.=<<___;
 	test	$acc0, $acc0
 	jnz	.Ladd_proceed$x			# (in1infty || in2infty)?
 	test	$acc1, $acc1
-	jz	.Ladd_proceed$x			# is_equal(S1,S2)?
+	jz	.Ladd_double$x			# is_equal(S1,S2)?
 
 	movq	%xmm0, $r_ptr			# restore $r_ptr
 	pxor	%xmm0, %xmm0
@@ -2400,6 +2409,13 @@ $code.=<<___;
 	movdqu	%xmm0, 0x40($r_ptr)
 	movdqu	%xmm0, 0x50($r_ptr)
 	jmp	.Ladd_done$x
+
+.align	32
+.Ladd_double$x:
+	movq	%xmm1, $a_ptr			# restore $a_ptr
+	movq	%xmm0, $r_ptr			# restore $r_ptr
+	add	\$`32*(18-5)`, %rsp		# difference in frame sizes
+	jmp	.Lpoint_double_shortcut$x
 
 .align	32
 .Ladd_proceed$x:

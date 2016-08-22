@@ -1,131 +1,30 @@
-/* ssl/t1_lib.c */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
- */
-/* ====================================================================
- * Copyright (c) 1998-2007 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <openssl/objects.h>
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/ocsp.h>
-#include <openssl/rand.h>
-#ifndef OPENSSL_NO_DH
-# include <openssl/dh.h>
-# include <openssl/bn.h>
-#endif
+#include <openssl/conf.h>
+#include <openssl/x509v3.h>
+#include <openssl/dh.h>
+#include <openssl/bn.h>
 #include "ssl_locl.h"
+#include <openssl/ct.h>
 
 static int tls_decrypt_ticket(SSL *s, const unsigned char *tick, int ticklen,
                               const unsigned char *sess_id, int sesslen,
                               SSL_SESSION **psess);
 static int ssl_check_clienthello_tlsext_early(SSL *s);
-int ssl_check_serverhello_tlsext(SSL *s);
+static int ssl_check_serverhello_tlsext(SSL *s);
 
 SSL3_ENC_METHOD const TLSv1_enc_data = {
     tls1_enc,
@@ -208,7 +107,10 @@ void tls1_free(SSL *s)
 void tls1_clear(SSL *s)
 {
     ssl3_clear(s);
-    s->version = s->method->version;
+    if (s->method->version == TLS_ANY_VERSION)
+        s->version = TLS_MAX_VERSION;
+    else
+        s->version = s->method->version;
 }
 
 #ifndef OPENSSL_NO_EC
@@ -219,9 +121,11 @@ typedef struct {
     unsigned int flags;         /* Flags: currently just field type */
 } tls_curve_info;
 
-# define TLS_CURVE_CHAR2         0x1
-# define TLS_CURVE_PRIME         0x0
-
+/*
+ * Table of curve information.
+ * Do not delete entries or reorder this array! It is used as a lookup
+ * table: the index of each entry is one less than the TLS curve id.
+ */
 static const tls_curve_info nid_list[] = {
     {NID_sect163k1, 80, TLS_CURVE_CHAR2}, /* sect163k1 (1) */
     {NID_sect163r1, 80, TLS_CURVE_CHAR2}, /* sect163r1 (2) */
@@ -251,6 +155,7 @@ static const tls_curve_info nid_list[] = {
     {NID_brainpoolP256r1, 128, TLS_CURVE_PRIME}, /* brainpoolP256r1 (26) */
     {NID_brainpoolP384r1, 192, TLS_CURVE_PRIME}, /* brainpoolP384r1 (27) */
     {NID_brainpoolP512r1, 256, TLS_CURVE_PRIME}, /* brainpool512r1 (28) */
+    {NID_X25519, 128, TLS_CURVE_CUSTOM}, /* X25519 (29) */
 };
 
 static const unsigned char ecformats_default[] = {
@@ -261,45 +166,32 @@ static const unsigned char ecformats_default[] = {
 
 /* The default curves */
 static const unsigned char eccurves_default[] = {
-    /* Prefer P-256 which has the fastest and most secure implementations. */
+    0, 29,                      /* X25519 (29) */
     0, 23,                      /* secp256r1 (23) */
-    /* Other >= 256-bit prime curves. */
     0, 25,                      /* secp521r1 (25) */
-    0, 28,                      /* brainpool512r1 (28) */
-    0, 27,                      /* brainpoolP384r1 (27) */
     0, 24,                      /* secp384r1 (24) */
-    0, 26,                      /* brainpoolP256r1 (26) */
-    0, 22,                      /* secp256k1 (22) */
-    /* >= 256-bit binary curves. */
-    0, 14,                      /* sect571r1 (14) */
-    0, 13,                      /* sect571k1 (13) */
-    0, 11,                      /* sect409k1 (11) */
-    0, 12,                      /* sect409r1 (12) */
-    0, 9,                       /* sect283k1 (9) */
-    0, 10,                      /* sect283r1 (10) */
 };
 
 static const unsigned char eccurves_all[] = {
-    /* Prefer P-256 which has the fastest and most secure implementations. */
+    0, 29,                      /* X25519 (29) */
     0, 23,                      /* secp256r1 (23) */
-    /* Other >= 256-bit prime curves. */
     0, 25,                      /* secp521r1 (25) */
-    0, 28,                      /* brainpool512r1 (28) */
-    0, 27,                      /* brainpoolP384r1 (27) */
     0, 24,                      /* secp384r1 (24) */
     0, 26,                      /* brainpoolP256r1 (26) */
-    0, 22,                      /* secp256k1 (22) */
-    /* >= 256-bit binary curves. */
-    0, 14,                      /* sect571r1 (14) */
-    0, 13,                      /* sect571k1 (13) */
-    0, 11,                      /* sect409k1 (11) */
-    0, 12,                      /* sect409r1 (12) */
-    0, 9,                       /* sect283k1 (9) */
-    0, 10,                      /* sect283r1 (10) */
+    0, 27,                      /* brainpoolP384r1 (27) */
+    0, 28,                      /* brainpool512r1 (28) */
+
     /*
      * Remaining curves disabled by default but still permitted if set
      * via an explicit callback or parameters.
      */
+    0, 22,                      /* secp256k1 (22) */
+    0, 14,                      /* sect571r1 (14) */
+    0, 13,                      /* sect571k1 (13) */
+    0, 11,                      /* sect409k1 (11) */
+    0, 12,                      /* sect409r1 (12) */
+    0, 9,                       /* sect283k1 (9) */
+    0, 10,                      /* sect283r1 (10) */
     0, 20,                      /* secp224k1 (20) */
     0, 21,                      /* secp224r1 (21) */
     0, 18,                      /* secp192k1 (18) */
@@ -317,83 +209,31 @@ static const unsigned char eccurves_all[] = {
     0, 3,                       /* sect163r2 (3) */
 };
 
-
 static const unsigned char suiteb_curves[] = {
     0, TLSEXT_curve_P_256,
     0, TLSEXT_curve_P_384
 };
 
-int tls1_ec_curve_id2nid(int curve_id)
+int tls1_ec_curve_id2nid(int curve_id, unsigned int *pflags)
 {
+    const tls_curve_info *cinfo;
     /* ECC curves from RFC 4492 and RFC 7027 */
     if ((curve_id < 1) || ((unsigned int)curve_id > OSSL_NELEM(nid_list)))
         return 0;
-    return nid_list[curve_id - 1].nid;
+    cinfo = nid_list + curve_id - 1;
+    if (pflags)
+        *pflags = cinfo->flags;
+    return cinfo->nid;
 }
 
 int tls1_ec_nid2curve_id(int nid)
 {
-    /* ECC curves from RFC 4492 and RFC 7027 */
-    switch (nid) {
-    case NID_sect163k1:        /* sect163k1 (1) */
-        return 1;
-    case NID_sect163r1:        /* sect163r1 (2) */
-        return 2;
-    case NID_sect163r2:        /* sect163r2 (3) */
-        return 3;
-    case NID_sect193r1:        /* sect193r1 (4) */
-        return 4;
-    case NID_sect193r2:        /* sect193r2 (5) */
-        return 5;
-    case NID_sect233k1:        /* sect233k1 (6) */
-        return 6;
-    case NID_sect233r1:        /* sect233r1 (7) */
-        return 7;
-    case NID_sect239k1:        /* sect239k1 (8) */
-        return 8;
-    case NID_sect283k1:        /* sect283k1 (9) */
-        return 9;
-    case NID_sect283r1:        /* sect283r1 (10) */
-        return 10;
-    case NID_sect409k1:        /* sect409k1 (11) */
-        return 11;
-    case NID_sect409r1:        /* sect409r1 (12) */
-        return 12;
-    case NID_sect571k1:        /* sect571k1 (13) */
-        return 13;
-    case NID_sect571r1:        /* sect571r1 (14) */
-        return 14;
-    case NID_secp160k1:        /* secp160k1 (15) */
-        return 15;
-    case NID_secp160r1:        /* secp160r1 (16) */
-        return 16;
-    case NID_secp160r2:        /* secp160r2 (17) */
-        return 17;
-    case NID_secp192k1:        /* secp192k1 (18) */
-        return 18;
-    case NID_X9_62_prime192v1: /* secp192r1 (19) */
-        return 19;
-    case NID_secp224k1:        /* secp224k1 (20) */
-        return 20;
-    case NID_secp224r1:        /* secp224r1 (21) */
-        return 21;
-    case NID_secp256k1:        /* secp256k1 (22) */
-        return 22;
-    case NID_X9_62_prime256v1: /* secp256r1 (23) */
-        return 23;
-    case NID_secp384r1:        /* secp384r1 (24) */
-        return 24;
-    case NID_secp521r1:        /* secp521r1 (25) */
-        return 25;
-    case NID_brainpoolP256r1:  /* brainpoolP256r1 (26) */
-        return 26;
-    case NID_brainpoolP384r1:  /* brainpoolP384r1 (27) */
-        return 27;
-    case NID_brainpoolP512r1:  /* brainpool512r1 (28) */
-        return 28;
-    default:
-        return 0;
+    size_t i;
+    for (i = 0; i < OSSL_NELEM(nid_list); i++) {
+        if (nid_list[i].nid == nid)
+            return i + 1;
     }
+    return 0;
 }
 
 /*
@@ -409,8 +249,7 @@ int tls1_ec_nid2curve_id(int nid)
  * so cannot happen in the 1.0.x series.)
  */
 static int tls1_get_curvelist(SSL *s, int sess,
-                              const unsigned char **pcurves,
-                              size_t *num_curves)
+                              const unsigned char **pcurves, size_t *num_curves)
 {
     size_t pcurveslen = 0;
     if (sess) {
@@ -543,8 +382,7 @@ int tls1_shared_curve(SSL *s, int nmatch)
         /* In practice, NID_undef == 0 but let's be precise. */
         return nmatch == -1 ? 0 : NID_undef;
     if (!tls1_get_curvelist
-        (s, !(s->options & SSL_OP_CIPHER_SERVER_PREFERENCE), &pref,
-         &num_pref))
+        (s, !(s->options & SSL_OP_CIPHER_SERVER_PREFERENCE), &pref, &num_pref))
         return nmatch == -1 ? 0 : NID_undef;
 
     /*
@@ -555,7 +393,7 @@ int tls1_shared_curve(SSL *s, int nmatch)
         supp = eccurves_all;
         num_supp = sizeof(eccurves_all) / 2;
     } else if (num_pref == 0 &&
-        (s->options & SSL_OP_CIPHER_SERVER_PREFERENCE) == 0) {
+               (s->options & SSL_OP_CIPHER_SERVER_PREFERENCE) == 0) {
         pref = eccurves_all;
         num_pref = sizeof(eccurves_all) / 2;
     }
@@ -569,7 +407,7 @@ int tls1_shared_curve(SSL *s, int nmatch)
                     continue;
                 if (nmatch == k) {
                     int id = (pref[0] << 8) | pref[1];
-                    return tls1_ec_curve_id2nid(id);
+                    return tls1_ec_curve_id2nid(id, NULL);
                 }
                 k++;
             }
@@ -648,8 +486,7 @@ static int nid_cb(const char *elem, int len, void *arg)
 }
 
 /* Set curves based on a colon separate list */
-int tls1_set_curves_list(unsigned char **pext, size_t *pextlen,
-                         const char *str)
+int tls1_set_curves_list(unsigned char **pext, size_t *pextlen, const char *str)
 {
     nid_cb_st ncb;
     ncb.nidcnt = 0;
@@ -664,46 +501,33 @@ int tls1_set_curves_list(unsigned char **pext, size_t *pextlen,
 static int tls1_set_ec_id(unsigned char *curve_id, unsigned char *comp_id,
                           EC_KEY *ec)
 {
-    int is_prime, id;
+    int id;
     const EC_GROUP *grp;
-    const EC_METHOD *meth;
     if (!ec)
         return 0;
     /* Determine if it is a prime field */
     grp = EC_KEY_get0_group(ec);
     if (!grp)
         return 0;
-    meth = EC_GROUP_method_of(grp);
-    if (!meth)
-        return 0;
-    if (EC_METHOD_get_field_type(meth) == NID_X9_62_prime_field)
-        is_prime = 1;
-    else
-        is_prime = 0;
     /* Determine curve ID */
     id = EC_GROUP_get_curve_name(grp);
     id = tls1_ec_nid2curve_id(id);
-    /* If we have an ID set it, otherwise set arbitrary explicit curve */
-    if (id) {
-        curve_id[0] = 0;
-        curve_id[1] = (unsigned char)id;
-    } else {
-        curve_id[0] = 0xff;
-        if (is_prime)
-            curve_id[1] = 0x01;
-        else
-            curve_id[1] = 0x02;
-    }
+    /* If no id return error: we don't support arbitrary explicit curves */
+    if (id == 0)
+        return 0;
+    curve_id[0] = 0;
+    curve_id[1] = (unsigned char)id;
     if (comp_id) {
         if (EC_KEY_get0_public_key(ec) == NULL)
             return 0;
-        if (EC_KEY_get_conv_form(ec) == POINT_CONVERSION_COMPRESSED) {
-            if (is_prime)
+        if (EC_KEY_get_conv_form(ec) == POINT_CONVERSION_UNCOMPRESSED) {
+            *comp_id = TLSEXT_ECPOINTFORMAT_uncompressed;
+        } else {
+            if ((nid_list[id - 1].flags & TLS_CURVE_TYPE) == TLS_CURVE_PRIME)
                 *comp_id = TLSEXT_ECPOINTFORMAT_ansiX962_compressed_prime;
             else
                 *comp_id = TLSEXT_ECPOINTFORMAT_ansiX962_compressed_char2;
-        } else
-            *comp_id = TLSEXT_ECPOINTFORMAT_uncompressed;
+        }
     }
     return 1;
 }
@@ -786,16 +610,13 @@ static int tls1_check_cert_param(SSL *s, X509 *x, int set_ee_md)
     unsigned char comp_id, curve_id[2];
     EVP_PKEY *pkey;
     int rv;
-    pkey = X509_get_pubkey(x);
+    pkey = X509_get0_pubkey(x);
     if (!pkey)
         return 0;
     /* If not EC nothing to do */
-    if (pkey->type != EVP_PKEY_EC) {
-        EVP_PKEY_free(pkey);
+    if (EVP_PKEY_id(pkey) != EVP_PKEY_EC)
         return 1;
-    }
-    rv = tls1_set_ec_id(curve_id, &comp_id, pkey->pkey.ec);
-    EVP_PKEY_free(pkey);
+    rv = tls1_set_ec_id(curve_id, &comp_id, EVP_PKEY_get0_EC_KEY(pkey));
     if (!rv)
         return 0;
     /*
@@ -839,7 +660,7 @@ static int tls1_check_cert_param(SSL *s, X509 *x, int set_ee_md)
 
 # ifndef OPENSSL_NO_EC
 /*
- * tls1_check_ec_tmp_key - Check EC temporary key compatiblity
+ * tls1_check_ec_tmp_key - Check EC temporary key compatibility
  * @s: SSL connection
  * @cid: Cipher ID we're considering using
  *
@@ -850,11 +671,6 @@ static int tls1_check_cert_param(SSL *s, X509 *x, int set_ee_md)
  */
 int tls1_check_ec_tmp_key(SSL *s, unsigned long cid)
 {
-#  ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
-    /* Allow any curve: not just those peer supports */
-    if (s->cert->cert_flags & SSL_CERT_FLAG_BROKEN_PROTOCOL)
-        return 1;
-#  endif
     /*
      * If Suite B, AES128 MUST use P-256 and AES256 MUST use P-384, no other
      * curves permitted.
@@ -896,19 +712,19 @@ static int tls1_check_cert_param(SSL *s, X509 *x, int set_ee_md)
  */
 
 #ifdef OPENSSL_NO_RSA
-# define tlsext_sigalg_rsa(md) /* */
+# define tlsext_sigalg_rsa(md)  /* */
 #else
 # define tlsext_sigalg_rsa(md) md, TLSEXT_signature_rsa,
 #endif
 
 #ifdef OPENSSL_NO_DSA
-# define tlsext_sigalg_dsa(md) /* */
+# define tlsext_sigalg_dsa(md)  /* */
 #else
 # define tlsext_sigalg_dsa(md) md, TLSEXT_signature_dsa,
 #endif
 
 #ifdef OPENSSL_NO_EC
-# define tlsext_sigalg_ecdsa(md) /* */
+# define tlsext_sigalg_ecdsa(md)/* */
 #else
 # define tlsext_sigalg_ecdsa(md) md, TLSEXT_signature_ecdsa,
 #endif
@@ -926,8 +742,8 @@ static const unsigned char tls12_sigalgs[] = {
         tlsext_sigalg(TLSEXT_hash_sha1)
 #ifndef OPENSSL_NO_GOST
         TLSEXT_hash_gostr3411, TLSEXT_signature_gostr34102001,
-        TLSEXT_hash_gostr34112012_256, TLSEXT_signature_gostr34102012_256,
-        TLSEXT_hash_gostr34112012_512, TLSEXT_signature_gostr34102012_512
+    TLSEXT_hash_gostr34112012_256, TLSEXT_signature_gostr34102012_256,
+    TLSEXT_hash_gostr34112012_512, TLSEXT_signature_gostr34102012_512
 #endif
 };
 
@@ -990,10 +806,10 @@ int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
         return 0;
     }
 #ifndef OPENSSL_NO_EC
-    if (pkey->type == EVP_PKEY_EC) {
+    if (EVP_PKEY_id(pkey) == EVP_PKEY_EC) {
         unsigned char curve_id[2], comp_id;
         /* Check compression and curve matches extensions */
-        if (!tls1_set_ec_id(curve_id, &comp_id, pkey->pkey.ec))
+        if (!tls1_set_ec_id(curve_id, &comp_id, EVP_PKEY_get0_EC_KEY(pkey)))
             return 0;
         if (!s->server && !tls1_check_ec_key(s, curve_id, &comp_id)) {
             SSLerr(SSL_F_TLS12_CHECK_PEER_SIGALG, SSL_R_WRONG_CURVE);
@@ -1042,8 +858,7 @@ int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
     }
     /* Make sure security callback allows algorithm */
     if (!ssl_security(s, SSL_SECOP_SIGALG_CHECK,
-                      EVP_MD_size(*pmd) * 4, EVP_MD_type(*pmd),
-                      (void *)sig)) {
+                      EVP_MD_size(*pmd) * 4, EVP_MD_type(*pmd), (void *)sig)) {
         SSLerr(SSL_F_TLS12_CHECK_PEER_SIGALG, SSL_R_WRONG_SIGNATURE_TYPE);
         return 0;
     }
@@ -1055,41 +870,28 @@ int tls12_check_peer_sigalg(const EVP_MD **pmd, SSL *s,
 }
 
 /*
- * Get a mask of disabled algorithms: an algorithm is disabled if it isn't
- * supported or doesn't appear in supported signature algorithms. Unlike
- * ssl_cipher_get_disabled this applies to a specific session and not global
- * settings.
+ * Set a mask of disabled algorithms: an algorithm is disabled if it isn't
+ * supported, doesn't appear in supported signature algorithms, isn't supported
+ * by the enabled protocol versions or by the security level.
+ *
+ * This function should only be used for checking which ciphers are supported
+ * by the client.
+ *
+ * Call ssl_cipher_disabled() to check that it's enabled or not.
  */
 void ssl_set_client_disabled(SSL *s)
 {
     s->s3->tmp.mask_a = 0;
     s->s3->tmp.mask_k = 0;
-    /* Don't allow TLS 1.2 only ciphers if we don't suppport them */
-    if (!SSL_CLIENT_USE_TLS1_2_CIPHERS(s))
-        s->s3->tmp.mask_ssl = SSL_TLSV1_2;
-    else
-        s->s3->tmp.mask_ssl = 0;
-    /* Disable TLS 1.0 ciphers if using SSL v3 */
-    if (s->client_version == SSL3_VERSION)
-        s->s3->tmp.mask_ssl |= SSL_TLSV1;
     ssl_set_sig_mask(&s->s3->tmp.mask_a, s, SSL_SECOP_SIGALG_MASK);
-    /*
-     * Disable static DH if we don't include any appropriate signature
-     * algorithms.
-     */
-    if (s->s3->tmp.mask_a & SSL_aRSA)
-        s->s3->tmp.mask_k |= SSL_kDHr | SSL_kECDHr;
-    if (s->s3->tmp.mask_a & SSL_aDSS)
-        s->s3->tmp.mask_k |= SSL_kDHd;
-    if (s->s3->tmp.mask_a & SSL_aECDSA)
-        s->s3->tmp.mask_k |= SSL_kECDHe;
-# ifndef OPENSSL_NO_PSK
+    ssl_get_client_min_max_version(s, &s->s3->tmp.min_ver, &s->s3->tmp.max_ver);
+#ifndef OPENSSL_NO_PSK
     /* with PSK there must be client callback set */
     if (!s->psk_client_callback) {
         s->s3->tmp.mask_a |= SSL_aPSK;
         s->s3->tmp.mask_k |= SSL_PSK;
     }
-#endif                         /* OPENSSL_NO_PSK */
+#endif                          /* OPENSSL_NO_PSK */
 #ifndef OPENSSL_NO_SRP
     if (!(s->srp_ctx.srp_Mask & SSL_kSRP)) {
         s->s3->tmp.mask_a |= SSL_aSRP;
@@ -1098,12 +900,28 @@ void ssl_set_client_disabled(SSL *s)
 #endif
 }
 
+/*
+ * ssl_cipher_disabled - check that a cipher is disabled or not
+ * @s: SSL connection that you want to use the cipher on
+ * @c: cipher to check
+ * @op: Security check that you want to do
+ *
+ * Returns 1 when it's disabled, 0 when enabled.
+ */
 int ssl_cipher_disabled(SSL *s, const SSL_CIPHER *c, int op)
 {
-    if (c->algorithm_ssl & s->s3->tmp.mask_ssl
-        || c->algorithm_mkey & s->s3->tmp.mask_k
+    if (c->algorithm_mkey & s->s3->tmp.mask_k
         || c->algorithm_auth & s->s3->tmp.mask_a)
         return 1;
+    if (s->s3->tmp.max_ver == 0)
+        return 1;
+    if (!SSL_IS_DTLS(s) && ((c->min_tls > s->s3->tmp.max_ver)
+                            || (c->max_tls < s->s3->tmp.min_ver)))
+        return 1;
+    if (SSL_IS_DTLS(s) && (DTLS_VERSION_GT(c->min_dtls, s->s3->tmp.max_ver)
+                           || DTLS_VERSION_LT(c->max_dtls, s->s3->tmp.min_ver)))
+        return 1;
+
     return !ssl_security(s, op, c->strength_bits, 0, (void *)c);
 }
 
@@ -1112,6 +930,81 @@ static int tls_use_ticket(SSL *s)
     if (s->options & SSL_OP_NO_TICKET)
         return 0;
     return ssl_security(s, SSL_SECOP_TICKET, 0, 0, NULL);
+}
+
+static int compare_uint(const void *p1, const void *p2)
+{
+    unsigned int u1 = *((const unsigned int *)p1);
+    unsigned int u2 = *((const unsigned int *)p2);
+    if (u1 < u2)
+        return -1;
+    else if (u1 > u2)
+        return 1;
+    else
+        return 0;
+}
+
+/*
+ * Per http://tools.ietf.org/html/rfc5246#section-7.4.1.4, there may not be
+ * more than one extension of the same type in a ClientHello or ServerHello.
+ * This function does an initial scan over the extensions block to filter those
+ * out. It returns 1 if all extensions are unique, and 0 if the extensions
+ * contain duplicates, could not be successfully parsed, or an internal error
+ * occurred.
+ */
+static int tls1_check_duplicate_extensions(const PACKET *packet)
+{
+    PACKET extensions = *packet;
+    size_t num_extensions = 0, i = 0;
+    unsigned int *extension_types = NULL;
+    int ret = 0;
+
+    /* First pass: count the extensions. */
+    while (PACKET_remaining(&extensions) > 0) {
+        unsigned int type;
+        PACKET extension;
+        if (!PACKET_get_net_2(&extensions, &type) ||
+            !PACKET_get_length_prefixed_2(&extensions, &extension)) {
+            goto done;
+        }
+        num_extensions++;
+    }
+
+    if (num_extensions <= 1)
+        return 1;
+
+    extension_types = OPENSSL_malloc(sizeof(unsigned int) * num_extensions);
+    if (extension_types == NULL) {
+        SSLerr(SSL_F_TLS1_CHECK_DUPLICATE_EXTENSIONS, ERR_R_MALLOC_FAILURE);
+        goto done;
+    }
+
+    /* Second pass: gather the extension types. */
+    extensions = *packet;
+    for (i = 0; i < num_extensions; i++) {
+        PACKET extension;
+        if (!PACKET_get_net_2(&extensions, &extension_types[i]) ||
+            !PACKET_get_length_prefixed_2(&extensions, &extension)) {
+            /* This should not happen. */
+            SSLerr(SSL_F_TLS1_CHECK_DUPLICATE_EXTENSIONS, ERR_R_INTERNAL_ERROR);
+            goto done;
+        }
+    }
+
+    if (PACKET_remaining(&extensions) != 0) {
+        SSLerr(SSL_F_TLS1_CHECK_DUPLICATE_EXTENSIONS, ERR_R_INTERNAL_ERROR);
+        goto done;
+    }
+    /* Sort the extensions and make sure there are no duplicates. */
+    qsort(extension_types, num_extensions, sizeof(unsigned int), compare_uint);
+    for (i = 1; i < num_extensions; i++) {
+        if (extension_types[i - 1] == extension_types[i])
+            goto done;
+    }
+    ret = 1;
+ done:
+    OPENSSL_free(extension_types);
+    return ret;
 }
 
 unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
@@ -1129,12 +1022,12 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
         STACK_OF(SSL_CIPHER) *cipher_stack = SSL_get_ciphers(s);
 
         for (i = 0; i < sk_SSL_CIPHER_num(cipher_stack); i++) {
-            SSL_CIPHER *c = sk_SSL_CIPHER_value(cipher_stack, i);
+            const SSL_CIPHER *c = sk_SSL_CIPHER_value(cipher_stack, i);
 
             alg_k = c->algorithm_mkey;
             alg_a = c->algorithm_auth;
-            if ((alg_k & (SSL_kECDHE | SSL_kECDHr | SSL_kECDHe | SSL_kECDHEPSK)
-                 || (alg_a & SSL_aECDSA))) {
+            if ((alg_k & (SSL_kECDHE | SSL_kECDHEPSK))
+                || (alg_a & SSL_aECDSA)) {
                 using_ecc = 1;
                 break;
             }
@@ -1180,7 +1073,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
 
         /*-
          * check for enough space.
-         * 4 for the servername type and entension length
+         * 4 for the servername type and extension length
          * 2 for servernamelist length
          * 1 for the hostname type
          * 2 for hostname length
@@ -1188,8 +1081,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
          */
 
         if ((lenmax = limit - ret - 9) < 0
-            || (size_str =
-                strlen(s->tlsext_hostname)) > (unsigned long)lenmax)
+            || (size_str = strlen(s->tlsext_hostname)) > (unsigned long)lenmax)
             return NULL;
 
         /* extension type and length */
@@ -1218,7 +1110,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
 
         /*-
          * check for enough space.
-         * 4 for the srp type type and entension length
+         * 4 for the srp type type and extension length
          * 1 for the srp user identity
          * + srp user identity length
          */
@@ -1295,7 +1187,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
         s2n(curves_list_len, ret);
         ret += curves_list_len;
     }
-#endif                         /* OPENSSL_NO_EC */
+#endif                          /* OPENSSL_NO_EC */
 
     if (tls_use_ticket(s)) {
         int ticklen;
@@ -1330,7 +1222,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     }
  skip_ext:
 
-    if (SSL_USE_SIGALGS(s)) {
+    if (SSL_CLIENT_USE_SIGALGS(s)) {
         size_t salglen;
         const unsigned char *salg;
         unsigned char *etmp;
@@ -1347,7 +1239,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
         s2n(salglen, etmp);
         ret += salglen;
     }
-
+#ifndef OPENSSL_NO_OCSP
     if (s->tlsext_status_type == TLSEXT_STATUSTYPE_ocsp) {
         int i;
         long extlen, idlen, itmp;
@@ -1391,27 +1283,30 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
         if (extlen > 0)
             i2d_X509_EXTENSIONS(s->tlsext_ocsp_exts, &ret);
     }
+#endif
 #ifndef OPENSSL_NO_HEARTBEATS
-    /* Add Heartbeat extension */
-    if ((limit - ret - 4 - 1) < 0)
-        return NULL;
-    s2n(TLSEXT_TYPE_heartbeat, ret);
-    s2n(1, ret);
-    /*-
-     * Set mode:
-     * 1: peer may send requests
-     * 2: peer not allowed to send requests
-     */
-    if (s->tlsext_heartbeat & SSL_TLSEXT_HB_DONT_RECV_REQUESTS)
-        *(ret++) = SSL_TLSEXT_HB_DONT_SEND_REQUESTS;
-    else
-        *(ret++) = SSL_TLSEXT_HB_ENABLED;
+    if (SSL_IS_DTLS(s)) {
+        /* Add Heartbeat extension */
+        if ((limit - ret - 4 - 1) < 0)
+            return NULL;
+        s2n(TLSEXT_TYPE_heartbeat, ret);
+        s2n(1, ret);
+        /*-
+         * Set mode:
+         * 1: peer may send requests
+         * 2: peer not allowed to send requests
+         */
+        if (s->tlsext_heartbeat & SSL_DTLSEXT_HB_DONT_RECV_REQUESTS)
+            *(ret++) = SSL_DTLSEXT_HB_DONT_SEND_REQUESTS;
+        else
+            *(ret++) = SSL_DTLSEXT_HB_ENABLED;
+    }
 #endif
 
 #ifndef OPENSSL_NO_NEXTPROTONEG
     if (s->ctx->next_proto_select_cb && !s->s3->tmp.finish_md_len) {
         /*
-         * The client advertises an emtpy extension to indicate its support
+         * The client advertises an empty extension to indicate its support
          * for Next Protocol Negotiation
          */
         if (limit - ret - 4 < 0)
@@ -1421,6 +1316,11 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     }
 #endif
 
+    /*
+     * finish_md_len is non-zero during a renegotiation, so
+     * this avoids sending ALPN during the renegotiation
+     * (see longer comment below)
+     */
     if (s->alpn_client_proto_list && !s->s3->tmp.finish_md_len) {
         if ((size_t)(limit - ret) < 6 + s->alpn_client_proto_list_len)
             return NULL;
@@ -1429,6 +1329,7 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
         s2n(s->alpn_client_proto_list_len, ret);
         memcpy(ret, s->alpn_client_proto_list, s->alpn_client_proto_list_len);
         ret += s->alpn_client_proto_list_len;
+        s->s3->alpn_sent = 1;
     }
 #ifndef OPENSSL_NO_SRTP
     if (SSL_IS_DTLS(s) && SSL_get_srtp_profiles(s)) {
@@ -1457,9 +1358,13 @@ unsigned char *ssl_add_clienthello_tlsext(SSL *s, unsigned char *buf,
     /* Add custom TLS Extensions to ClientHello */
     if (!custom_ext_add(s, 0, &ret, limit, al))
         return NULL;
-#ifdef TLSEXT_TYPE_encrypt_then_mac
     s2n(TLSEXT_TYPE_encrypt_then_mac, ret);
     s2n(0, ret);
+#ifndef OPENSSL_NO_CT
+    if (s->ct_validation_callback != NULL) {
+        s2n(TLSEXT_TYPE_signed_certificate_timestamp, ret);
+        s2n(0, ret);
+    }
 #endif
     s2n(TLSEXT_TYPE_extended_master_secret, ret);
     s2n(0, ret);
@@ -1508,8 +1413,7 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
 #ifndef OPENSSL_NO_EC
     unsigned long alg_k = s->s3->tmp.new_cipher->algorithm_mkey;
     unsigned long alg_a = s->s3->tmp.new_cipher->algorithm_auth;
-    int using_ecc = (alg_k & (SSL_kECDHE | SSL_kECDHr | SSL_kECDHe))
-        || (alg_a & SSL_aECDSA);
+    int using_ecc = (alg_k & SSL_kECDHE) || (alg_a & SSL_aECDSA);
     using_ecc = using_ecc && (s->session->tlsext_ecpointformatlist != NULL);
 #endif
 
@@ -1582,13 +1486,19 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
      * Currently the server should not respond with a SupportedCurves
      * extension
      */
-#endif                         /* OPENSSL_NO_EC */
+#endif                          /* OPENSSL_NO_EC */
 
     if (s->tlsext_ticket_expected && tls_use_ticket(s)) {
         if ((long)(limit - ret - 4) < 0)
             return NULL;
         s2n(TLSEXT_TYPE_session_ticket, ret);
         s2n(0, ret);
+    } else {
+        /*
+         * if we don't add the above TLSEXT, we can't add a session ticket
+         * later
+         */
+        s->tlsext_ticket_expected = 0;
     }
 
     if (s->tlsext_status_expected) {
@@ -1597,7 +1507,6 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
         s2n(TLSEXT_TYPE_status_request, ret);
         s2n(0, ret);
     }
-
 #ifndef OPENSSL_NO_SRTP
     if (SSL_IS_DTLS(s) && s->srtp_profile) {
         int el;
@@ -1640,7 +1549,7 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
     }
 #ifndef OPENSSL_NO_HEARTBEATS
     /* Add Heartbeat extension if we've received one */
-    if (s->tlsext_heartbeat & SSL_TLSEXT_HB_ENABLED) {
+    if (SSL_IS_DTLS(s) && (s->tlsext_heartbeat & SSL_DTLSEXT_HB_ENABLED)) {
         if ((limit - ret - 4 - 1) < 0)
             return NULL;
         s2n(TLSEXT_TYPE_heartbeat, ret);
@@ -1650,10 +1559,10 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
          * 1: peer may send requests
          * 2: peer not allowed to send requests
          */
-        if (s->tlsext_heartbeat & SSL_TLSEXT_HB_DONT_RECV_REQUESTS)
-            *(ret++) = SSL_TLSEXT_HB_DONT_SEND_REQUESTS;
+        if (s->tlsext_heartbeat & SSL_DTLSEXT_HB_DONT_RECV_REQUESTS)
+            *(ret++) = SSL_DTLSEXT_HB_DONT_SEND_REQUESTS;
         else
-            *(ret++) = SSL_TLSEXT_HB_ENABLED;
+            *(ret++) = SSL_DTLSEXT_HB_ENABLED;
 
     }
 #endif
@@ -1682,7 +1591,6 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
 #endif
     if (!custom_ext_add(s, 1, &ret, limit, al))
         return NULL;
-#ifdef TLSEXT_TYPE_encrypt_then_mac
     if (s->s3->flags & TLS1_FLAGS_ENCRYPT_THEN_MAC) {
         /*
          * Don't use encrypt_then_mac if AEAD or RC4 might want to disable
@@ -1698,15 +1606,14 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
             s2n(0, ret);
         }
     }
-#endif
-    if (!s->hit && s->session->flags & SSL_SESS_FLAG_EXTMS) {
+    if (s->s3->flags & TLS1_FLAGS_RECEIVED_EXTMS) {
         s2n(TLSEXT_TYPE_extended_master_secret, ret);
         s2n(0, ret);
     }
 
-    if (s->s3->alpn_selected) {
+    if (s->s3->alpn_selected != NULL) {
         const unsigned char *selected = s->s3->alpn_selected;
-        unsigned len = s->s3->alpn_selected_len;
+        unsigned int len = s->s3->alpn_selected_len;
 
         if ((long)(limit - ret - 4 - 2 - 1 - len) < 0)
             return NULL;
@@ -1728,63 +1635,81 @@ unsigned char *ssl_add_serverhello_tlsext(SSL *s, unsigned char *buf,
 }
 
 /*
- * tls1_alpn_handle_client_hello is called to process the ALPN extension in a
- * ClientHello.  data: the contents of the extension, not including the type
- * and length.  data_len: the number of bytes in |data| al: a pointer to the
- * alert value to send in the event of a non-zero return.  returns: 0 on
- * success.
+ * Save the ALPN extension in a ClientHello.
+ * pkt: the contents of the ALPN extension, not including type and length.
+ * al: a pointer to the  alert value to send in the event of a failure.
+ * returns: 1 on success, 0 on error.
  */
 static int tls1_alpn_handle_client_hello(SSL *s, PACKET *pkt, int *al)
 {
-    unsigned int data_len;
-    unsigned int proto_len;
-    const unsigned char *selected;
-    unsigned char *data;
-    unsigned char selected_len;
-    int r;
+    PACKET protocol_list, save_protocol_list, protocol;
 
-    if (s->ctx->alpn_select_cb == NULL)
-        return 0;
-
-    /*
-     * data should contain a uint16 length followed by a series of 8-bit,
-     * length-prefixed strings.
-     */
-    if (!PACKET_get_net_2(pkt, &data_len)
-            || PACKET_remaining(pkt) != data_len
-            || !PACKET_peek_bytes(pkt, &data, data_len))
-        goto parse_error;
-
-    do {
-        if (!PACKET_get_1(pkt, &proto_len)
-                || proto_len == 0
-                || !PACKET_forward(pkt, proto_len))
-            goto parse_error;
-    } while (PACKET_remaining(pkt));
-
-    r = s->ctx->alpn_select_cb(s, &selected, &selected_len, data, data_len,
-                               s->ctx->alpn_select_cb_arg);
-    if (r == SSL_TLSEXT_ERR_OK) {
-        OPENSSL_free(s->s3->alpn_selected);
-        s->s3->alpn_selected = OPENSSL_malloc(selected_len);
-        if (s->s3->alpn_selected == NULL) {
-            *al = SSL_AD_INTERNAL_ERROR;
-            return -1;
-        }
-        memcpy(s->s3->alpn_selected, selected, selected_len);
-        s->s3->alpn_selected_len = selected_len;
-    }
-    return 0;
-
- parse_error:
     *al = SSL_AD_DECODE_ERROR;
-    return -1;
+
+    if (!PACKET_as_length_prefixed_2(pkt, &protocol_list)
+        || PACKET_remaining(&protocol_list) < 2) {
+        return 0;
+    }
+
+    save_protocol_list = protocol_list;
+    do {
+        /* Protocol names can't be empty. */
+        if (!PACKET_get_length_prefixed_1(&protocol_list, &protocol)
+            || PACKET_remaining(&protocol) == 0) {
+            return 0;
+        }
+    } while (PACKET_remaining(&protocol_list) != 0);
+
+    if (!PACKET_memdup(&save_protocol_list,
+                       &s->s3->alpn_proposed, &s->s3->alpn_proposed_len)) {
+        *al = TLS1_AD_INTERNAL_ERROR;
+        return 0;
+    }
+
+    return 1;
+}
+
+/*
+ * Process the ALPN extension in a ClientHello.
+ * al: a pointer to the alert value to send in the event of a failure.
+ * returns 1 on success, 0 on error.
+ */
+static int tls1_alpn_handle_client_hello_late(SSL *s, int *al)
+{
+    const unsigned char *selected = NULL;
+    unsigned char selected_len = 0;
+
+    if (s->ctx->alpn_select_cb != NULL && s->s3->alpn_proposed != NULL) {
+        int r = s->ctx->alpn_select_cb(s, &selected, &selected_len,
+                                       s->s3->alpn_proposed,
+                                       s->s3->alpn_proposed_len,
+                                       s->ctx->alpn_select_cb_arg);
+
+        if (r == SSL_TLSEXT_ERR_OK) {
+            OPENSSL_free(s->s3->alpn_selected);
+            s->s3->alpn_selected = OPENSSL_memdup(selected, selected_len);
+            if (s->s3->alpn_selected == NULL) {
+                *al = SSL_AD_INTERNAL_ERROR;
+                return 0;
+            }
+            s->s3->alpn_selected_len = selected_len;
+#ifndef OPENSSL_NO_NEXTPROTONEG
+            /* ALPN takes precedence over NPN. */
+            s->s3->next_proto_neg_seen = 0;
+#endif
+        } else {
+            *al = SSL_AD_NO_APPLICATION_PROTOCOL;
+            return 0;
+        }
+    }
+
+    return 1;
 }
 
 #ifndef OPENSSL_NO_EC
 /*-
  * ssl_check_for_safari attempts to fingerprint Safari using OS X
- * SecureTransport using the TLS extension block in |d|, of length |n|.
+ * SecureTransport using the TLS extension block in |pkt|.
  * Safari, since 10.6, sends exactly these extensions, in this order:
  *   SNI,
  *   elliptic_curves
@@ -1797,9 +1722,9 @@ static int tls1_alpn_handle_client_hello(SSL *s, PACKET *pkt, int *al)
  */
 static void ssl_check_for_safari(SSL *s, const PACKET *pkt)
 {
-    unsigned int type, size;
-    unsigned char *eblock1, *eblock2;
-    PACKET tmppkt;
+    unsigned int type;
+    PACKET sni, tmppkt;
+    size_t ext_len;
 
     static const unsigned char kSafariExtensionsBlock[] = {
         0x00, 0x0a,             /* elliptic_curves extension */
@@ -1813,10 +1738,7 @@ static void ssl_check_for_safari(SSL *s, const PACKET *pkt)
         0x00, 0x02,             /* 2 bytes */
         0x01,                   /* 1 point format */
         0x00,                   /* uncompressed */
-    };
-
-    /* The following is only present in TLS 1.2 */
-    static const unsigned char kSafariTLS12ExtensionsBlock[] = {
+        /* The following is only present in TLS 1.2 */
         0x00, 0x0d,             /* signature_algorithms */
         0x00, 0x0c,             /* 12 bytes */
         0x00, 0x0a,             /* 10 bytes */
@@ -1827,51 +1749,46 @@ static void ssl_check_for_safari(SSL *s, const PACKET *pkt)
         0x02, 0x03,             /* SHA-1/ECDSA */
     };
 
+    /* Length of the common prefix (first two extensions). */
+    static const size_t kSafariCommonExtensionsLength = 18;
+
     tmppkt = *pkt;
 
     if (!PACKET_forward(&tmppkt, 2)
-            || !PACKET_get_net_2(&tmppkt, &type)
-            || !PACKET_get_net_2(&tmppkt, &size)
-            || !PACKET_forward(&tmppkt, size))
+        || !PACKET_get_net_2(&tmppkt, &type)
+        || !PACKET_get_length_prefixed_2(&tmppkt, &sni)) {
         return;
+    }
 
     if (type != TLSEXT_TYPE_server_name)
         return;
 
-    if (TLS1_get_client_version(s) >= TLS1_2_VERSION) {
-        const size_t len1 = sizeof(kSafariExtensionsBlock);
-        const size_t len2 = sizeof(kSafariTLS12ExtensionsBlock);
+    ext_len = TLS1_get_client_version(s) >= TLS1_2_VERSION ?
+        sizeof(kSafariExtensionsBlock) : kSafariCommonExtensionsLength;
 
-        if (!PACKET_get_bytes(&tmppkt, &eblock1, len1)
-                || !PACKET_get_bytes(&tmppkt, &eblock2, len2)
-                || PACKET_remaining(&tmppkt))
-            return;
-        if (memcmp(eblock1, kSafariExtensionsBlock, len1) != 0)
-            return;
-        if (memcmp(eblock2, kSafariTLS12ExtensionsBlock, len2) != 0)
-            return;
-    } else {
-        const size_t len = sizeof(kSafariExtensionsBlock);
-
-        if (!PACKET_get_bytes(&tmppkt, &eblock1, len)
-                || PACKET_remaining(&tmppkt))
-            return;
-        if (memcmp(eblock1, kSafariExtensionsBlock, len) != 0)
-            return;
-    }
-
-    s->s3->is_probably_safari = 1;
+    s->s3->is_probably_safari = PACKET_equal(&tmppkt, kSafariExtensionsBlock,
+                                             ext_len);
 }
-#endif                         /* !OPENSSL_NO_EC */
+#endif                          /* !OPENSSL_NO_EC */
 
+/*
+ * Parse ClientHello extensions and stash extension info in various parts of
+ * the SSL object. Verify that there are no duplicate extensions.
+ *
+ * Behaviour upon resumption is extension-specific. If the extension has no
+ * effect during resumption, it is parsed (to verify its format) but otherwise
+ * ignored.
+ *
+ * Consumes the entire packet in |pkt|. Returns 1 on success and 0 on failure.
+ * Upon failure, sets |al| to the appropriate alert.
+ */
 static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
 {
     unsigned int type;
-    unsigned int size;
-    unsigned int len;
-    unsigned char *data;
     int renegotiate_seen = 0;
+    PACKET extensions;
 
+    *al = SSL_AD_DECODE_ERROR;
     s->servername_done = 0;
     s->tlsext_status_type = -1;
 #ifndef OPENSSL_NO_NEXTPROTONEG
@@ -1880,22 +1797,24 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
 
     OPENSSL_free(s->s3->alpn_selected);
     s->s3->alpn_selected = NULL;
+    s->s3->alpn_selected_len = 0;
+    OPENSSL_free(s->s3->alpn_proposed);
+    s->s3->alpn_proposed = NULL;
+    s->s3->alpn_proposed_len = 0;
 #ifndef OPENSSL_NO_HEARTBEATS
-    s->tlsext_heartbeat &= ~(SSL_TLSEXT_HB_ENABLED |
-                             SSL_TLSEXT_HB_DONT_SEND_REQUESTS);
+    s->tlsext_heartbeat &= ~(SSL_DTLSEXT_HB_ENABLED |
+                             SSL_DTLSEXT_HB_DONT_SEND_REQUESTS);
 #endif
 
 #ifndef OPENSSL_NO_EC
     if (s->options & SSL_OP_SAFARI_ECDHE_ECDSA_BUG)
         ssl_check_for_safari(s, pkt);
-# endif /* !OPENSSL_NO_EC */
+#endif                          /* !OPENSSL_NO_EC */
 
     /* Clear any signature algorithms extension received */
     OPENSSL_free(s->s3->tmp.peer_sigalgs);
     s->s3->tmp.peer_sigalgs = NULL;
-#ifdef TLSEXT_TYPE_encrypt_then_mac
     s->s3->flags &= ~TLS1_FLAGS_ENCRYPT_THEN_MAC;
-#endif
 
 #ifndef OPENSSL_NO_SRP
     OPENSSL_free(s->srp_ctx.login);
@@ -1907,26 +1826,29 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
     if (PACKET_remaining(pkt) == 0)
         goto ri_check;
 
-    if (!PACKET_get_net_2(pkt, &len))
-        goto err;
+    if (!PACKET_as_length_prefixed_2(pkt, &extensions))
+        return 0;
 
-    if (PACKET_remaining(pkt) != len)
-        goto err;
+    if (!tls1_check_duplicate_extensions(&extensions))
+        return 0;
 
-    while (PACKET_get_net_2(pkt, &type) && PACKET_get_net_2(pkt, &size)) {
-        PACKET subpkt;
-
-        if (!PACKET_peek_bytes(pkt, &data, size))
-            goto err;
+    /*
+     * We parse all extensions to ensure the ClientHello is well-formed but,
+     * unless an extension specifies otherwise, we ignore extensions upon
+     * resumption.
+     */
+    while (PACKET_get_net_2(&extensions, &type)) {
+        PACKET extension;
+        if (!PACKET_get_length_prefixed_2(&extensions, &extension))
+            return 0;
 
         if (s->tlsext_debug_cb)
-            s->tlsext_debug_cb(s, 0, type, data, size, s->tlsext_debug_arg);
-
-        if (!PACKET_get_sub_packet(pkt, &subpkt, size))
-            goto err;
+            s->tlsext_debug_cb(s, 0, type, PACKET_data(&extension),
+                               PACKET_remaining(&extension),
+                               s->tlsext_debug_arg);
 
         if (type == TLSEXT_TYPE_renegotiate) {
-            if (!ssl_parse_clienthello_renegotiate_ext(s, &subpkt, al))
+            if (!ssl_parse_clienthello_renegotiate_ext(s, &extension, al))
                 return 0;
             renegotiate_seen = 1;
         } else if (s->version == SSL3_VERSION) {
@@ -1957,219 +1879,186 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
  */
 
         else if (type == TLSEXT_TYPE_server_name) {
-            unsigned char *sdata;
             unsigned int servname_type;
-            unsigned int dsize;
-            PACKET ssubpkt;
+            PACKET sni, hostname;
 
-            if (!PACKET_get_net_2(&subpkt, &dsize)
-                    || !PACKET_get_sub_packet(&subpkt, &ssubpkt, dsize))
-                goto err;
-
-            while (PACKET_remaining(&ssubpkt) > 3) {
-                if (!PACKET_get_1(&ssubpkt, &servname_type)
-                        || !PACKET_get_net_2(&ssubpkt, &len)
-                        || PACKET_remaining(&ssubpkt) < len)
-                    goto err;
-
-                if (s->servername_done == 0)
-                    switch (servname_type) {
-                    case TLSEXT_NAMETYPE_host_name:
-                        if (!s->hit) {
-                            if (s->session->tlsext_hostname)
-                                goto err;
-
-                            if (len > TLSEXT_MAXLEN_host_name) {
-                                *al = TLS1_AD_UNRECOGNIZED_NAME;
-                                return 0;
-                            }
-                            if ((s->session->tlsext_hostname =
-                                 OPENSSL_malloc(len + 1)) == NULL) {
-                                *al = TLS1_AD_INTERNAL_ERROR;
-                                return 0;
-                            }
-                            if (!PACKET_copy_bytes(&ssubpkt,
-                                    (unsigned char *)s->session
-                                        ->tlsext_hostname,
-                                    len)) {
-                                *al = SSL_AD_DECODE_ERROR;
-                                return 0;
-                            }
-                            s->session->tlsext_hostname[len] = '\0';
-                            if (strlen(s->session->tlsext_hostname) != len) {
-                                OPENSSL_free(s->session->tlsext_hostname);
-                                s->session->tlsext_hostname = NULL;
-                                *al = TLS1_AD_UNRECOGNIZED_NAME;
-                                return 0;
-                            }
-                            s->servername_done = 1;
-
-                        } else {
-                            if (!PACKET_get_bytes(&ssubpkt, &sdata, len)) {
-                                *al = SSL_AD_DECODE_ERROR;
-                                return 0;
-                            }
-                            s->servername_done = s->session->tlsext_hostname
-                                && strlen(s->session->tlsext_hostname) == len
-                                && strncmp(s->session->tlsext_hostname,
-                                           (char *)sdata, len) == 0;
-                        }
-
-                        break;
-
-                    default:
-                        break;
-                    }
+            if (!PACKET_as_length_prefixed_2(&extension, &sni)
+                /* ServerNameList must be at least 1 byte long. */
+                || PACKET_remaining(&sni) == 0) {
+                return 0;
             }
-            /* We shouldn't have any bytes left */
-            if (PACKET_remaining(&ssubpkt) != 0)
-                goto err;
 
+            /*
+             * Although the server_name extension was intended to be
+             * extensible to new name types, RFC 4366 defined the
+             * syntax inextensibility and OpenSSL 1.0.x parses it as
+             * such.
+             * RFC 6066 corrected the mistake but adding new name types
+             * is nevertheless no longer feasible, so act as if no other
+             * SNI types can exist, to simplify parsing.
+             *
+             * Also note that the RFC permits only one SNI value per type,
+             * i.e., we can only have a single hostname.
+             */
+            if (!PACKET_get_1(&sni, &servname_type)
+                || servname_type != TLSEXT_NAMETYPE_host_name
+                || !PACKET_as_length_prefixed_2(&sni, &hostname)) {
+                return 0;
+            }
+
+            if (!s->hit) {
+                if (PACKET_remaining(&hostname) > TLSEXT_MAXLEN_host_name) {
+                    *al = TLS1_AD_UNRECOGNIZED_NAME;
+                    return 0;
+                }
+
+                if (PACKET_contains_zero_byte(&hostname)) {
+                    *al = TLS1_AD_UNRECOGNIZED_NAME;
+                    return 0;
+                }
+
+                if (!PACKET_strndup(&hostname, &s->session->tlsext_hostname)) {
+                    *al = TLS1_AD_INTERNAL_ERROR;
+                    return 0;
+                }
+
+                s->servername_done = 1;
+            } else {
+                /*
+                 * TODO(openssl-team): if the SNI doesn't match, we MUST
+                 * fall back to a full handshake.
+                 */
+                s->servername_done = s->session->tlsext_hostname
+                    && PACKET_equal(&hostname, s->session->tlsext_hostname,
+                                    strlen(s->session->tlsext_hostname));
+            }
         }
 #ifndef OPENSSL_NO_SRP
         else if (type == TLSEXT_TYPE_srp) {
-            if (!PACKET_get_1(&subpkt, &len)
-                    || s->srp_ctx.login != NULL)
-                goto err;
+            PACKET srp_I;
 
-            if ((s->srp_ctx.login = OPENSSL_malloc(len + 1)) == NULL)
-                return -1;
-            if (!PACKET_copy_bytes(&subpkt, (unsigned char *)s->srp_ctx.login,
-                                   len))
-                goto err;
-            s->srp_ctx.login[len] = '\0';
+            if (!PACKET_as_length_prefixed_1(&extension, &srp_I))
+                return 0;
 
-            if (strlen(s->srp_ctx.login) != len
-                    || PACKET_remaining(&subpkt))
-                goto err;
+            if (PACKET_contains_zero_byte(&srp_I))
+                return 0;
+
+            /*
+             * TODO(openssl-team): currently, we re-authenticate the user
+             * upon resumption. Instead, we MUST ignore the login.
+             */
+            if (!PACKET_strndup(&srp_I, &s->srp_ctx.login)) {
+                *al = TLS1_AD_INTERNAL_ERROR;
+                return 0;
+            }
         }
 #endif
 
 #ifndef OPENSSL_NO_EC
         else if (type == TLSEXT_TYPE_ec_point_formats) {
-            unsigned int ecpointformatlist_length;
+            PACKET ec_point_format_list;
 
-            if (!PACKET_get_1(&subpkt, &ecpointformatlist_length)
-                    || ecpointformatlist_length == 0)
-                goto err;
-
-            if (!s->hit) {
-                OPENSSL_free(s->session->tlsext_ecpointformatlist);
-                s->session->tlsext_ecpointformatlist = NULL;
-                s->session->tlsext_ecpointformatlist_length = 0;
-                if ((s->session->tlsext_ecpointformatlist =
-                     OPENSSL_malloc(ecpointformatlist_length)) == NULL) {
-                    *al = TLS1_AD_INTERNAL_ERROR;
-                    return 0;
-                }
-                s->session->tlsext_ecpointformatlist_length =
-                    ecpointformatlist_length;
-                if (!PACKET_copy_bytes(&subpkt,
-                        s->session->tlsext_ecpointformatlist,
-                        ecpointformatlist_length))
-                    goto err;
-            } else if (!PACKET_forward(&subpkt, ecpointformatlist_length)) {
-                goto err;
-            }
-            /* We should have consumed all the bytes by now */
-            if (PACKET_remaining(&subpkt)) {
-                *al = TLS1_AD_DECODE_ERROR;
+            if (!PACKET_as_length_prefixed_1(&extension, &ec_point_format_list)
+                || PACKET_remaining(&ec_point_format_list) == 0) {
                 return 0;
             }
-        } else if (type == TLSEXT_TYPE_elliptic_curves) {
-            unsigned int ellipticcurvelist_length;
-
-            /* Each NamedCurve is 2 bytes and we must have at least 1 */
-            if (!PACKET_get_net_2(&subpkt, &ellipticcurvelist_length)
-                    || ellipticcurvelist_length == 0
-                    || (ellipticcurvelist_length & 1) != 0)
-                goto err;
 
             if (!s->hit) {
-                if (s->session->tlsext_ellipticcurvelist)
-                    goto err;
-
-                s->session->tlsext_ellipticcurvelist_length = 0;
-                if ((s->session->tlsext_ellipticcurvelist =
-                     OPENSSL_malloc(ellipticcurvelist_length)) == NULL) {
+                if (!PACKET_memdup(&ec_point_format_list,
+                                   &s->session->tlsext_ecpointformatlist,
+                                   &s->
+                                   session->tlsext_ecpointformatlist_length)) {
                     *al = TLS1_AD_INTERNAL_ERROR;
                     return 0;
                 }
-                s->session->tlsext_ellipticcurvelist_length =
-                    ellipticcurvelist_length;
-                if (!PACKET_copy_bytes(&subpkt,
-                        s->session->tlsext_ellipticcurvelist,
-                        ellipticcurvelist_length))
-                    goto err;
-            } else if (!PACKET_forward(&subpkt, ellipticcurvelist_length)) {
-                goto err;
             }
-            /* We should have consumed all the bytes by now */
-            if (PACKET_remaining(&subpkt)) {
-                goto err;
+        } else if (type == TLSEXT_TYPE_elliptic_curves) {
+            PACKET elliptic_curve_list;
+
+            /* Each NamedCurve is 2 bytes and we must have at least 1. */
+            if (!PACKET_as_length_prefixed_2(&extension, &elliptic_curve_list)
+                || PACKET_remaining(&elliptic_curve_list) == 0
+                || (PACKET_remaining(&elliptic_curve_list) % 2) != 0) {
+                return 0;
+            }
+
+            if (!s->hit) {
+                if (!PACKET_memdup(&elliptic_curve_list,
+                                   &s->session->tlsext_ellipticcurvelist,
+                                   &s->
+                                   session->tlsext_ellipticcurvelist_length)) {
+                    *al = TLS1_AD_INTERNAL_ERROR;
+                    return 0;
+                }
             }
         }
-#endif                         /* OPENSSL_NO_EC */
+#endif                          /* OPENSSL_NO_EC */
         else if (type == TLSEXT_TYPE_session_ticket) {
-            if (!PACKET_forward(&subpkt, size)
-                || (s->tls_session_ticket_ext_cb &&
-                    !s->tls_session_ticket_ext_cb(s, data, size,
-                                        s->tls_session_ticket_ext_cb_arg))) {
+            if (s->tls_session_ticket_ext_cb &&
+                !s->tls_session_ticket_ext_cb(s, PACKET_data(&extension),
+                                              PACKET_remaining(&extension),
+                                              s->tls_session_ticket_ext_cb_arg))
+            {
                 *al = TLS1_AD_INTERNAL_ERROR;
                 return 0;
             }
         } else if (type == TLSEXT_TYPE_signature_algorithms) {
-            unsigned int dsize;
+            PACKET supported_sig_algs;
 
-            if (s->s3->tmp.peer_sigalgs
-                    || !PACKET_get_net_2(&subpkt, &dsize)
-                    || (dsize & 1) != 0
-                    || (dsize == 0)
-                    || !PACKET_get_bytes(&subpkt, &data, dsize)
-                    || PACKET_remaining(&subpkt) != 0
-                    || !tls1_save_sigalgs(s, data, dsize)) {
-                goto err;
+            if (!PACKET_as_length_prefixed_2(&extension, &supported_sig_algs)
+                || (PACKET_remaining(&supported_sig_algs) % 2) != 0
+                || PACKET_remaining(&supported_sig_algs) == 0) {
+                return 0;
+            }
+
+            if (!s->hit) {
+                if (!tls1_save_sigalgs(s, PACKET_data(&supported_sig_algs),
+                                       PACKET_remaining(&supported_sig_algs))) {
+                    return 0;
+                }
             }
         } else if (type == TLSEXT_TYPE_status_request) {
-            PACKET ssubpkt;
-
-            if (!PACKET_get_1(&subpkt,
-                              (unsigned int *)&s->tlsext_status_type))
-                goto err;
-
+            if (!PACKET_get_1(&extension,
+                              (unsigned int *)&s->tlsext_status_type)) {
+                return 0;
+            }
+#ifndef OPENSSL_NO_OCSP
             if (s->tlsext_status_type == TLSEXT_STATUSTYPE_ocsp) {
-                const unsigned char *sdata;
-                unsigned int dsize;
-                /* Read in responder_id_list */
-                if (!PACKET_get_net_2(&subpkt, &dsize)
-                        || !PACKET_get_sub_packet(&subpkt, &ssubpkt, dsize))
-                    goto err;
+                const unsigned char *ext_data;
+                PACKET responder_id_list, exts;
+                if (!PACKET_get_length_prefixed_2
+                    (&extension, &responder_id_list))
+                    return 0;
 
-                while (PACKET_remaining(&ssubpkt)) {
+                while (PACKET_remaining(&responder_id_list) > 0) {
                     OCSP_RESPID *id;
-                    unsigned int idsize;
+                    PACKET responder_id;
+                    const unsigned char *id_data;
 
-                    if (PACKET_remaining(&ssubpkt) < 4
-                            || !PACKET_get_net_2(&ssubpkt, &idsize)
-                            || !PACKET_get_bytes(&ssubpkt, &data, idsize)) {
-                        goto err;
+                    if (!PACKET_get_length_prefixed_2(&responder_id_list,
+                                                      &responder_id)
+                        || PACKET_remaining(&responder_id) == 0) {
+                        return 0;
                     }
-                    sdata = data;
-                    data += idsize;
-                    id = d2i_OCSP_RESPID(NULL, &sdata, idsize);
-                    if (!id)
-                        goto err;
-                    if (data != sdata) {
-                        OCSP_RESPID_free(id);
-                        goto err;
-                    }
-                    if (!s->tlsext_ocsp_ids
-                        && !(s->tlsext_ocsp_ids =
-                             sk_OCSP_RESPID_new_null())) {
-                        OCSP_RESPID_free(id);
+
+                    if (s->tlsext_ocsp_ids == NULL
+                        && (s->tlsext_ocsp_ids =
+                            sk_OCSP_RESPID_new_null()) == NULL) {
                         *al = SSL_AD_INTERNAL_ERROR;
                         return 0;
                     }
+
+                    id_data = PACKET_data(&responder_id);
+                    id = d2i_OCSP_RESPID(NULL, &id_data,
+                                         PACKET_remaining(&responder_id));
+                    if (id == NULL)
+                        return 0;
+
+                    if (id_data != PACKET_end(&responder_id)) {
+                        OCSP_RESPID_free(id);
+                        return 0;
+                    }
+
                     if (!sk_OCSP_RESPID_push(s->tlsext_ocsp_ids, id)) {
                         OCSP_RESPID_free(id);
                         *al = SSL_AD_INTERNAL_ERROR;
@@ -2178,43 +2067,46 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
                 }
 
                 /* Read in request_extensions */
-                if (!PACKET_get_net_2(&subpkt, &dsize)
-                        || !PACKET_get_bytes(&subpkt, &data, dsize)
-                        || PACKET_remaining(&subpkt)) {
-                    goto err;
-                }
-                sdata = data;
-                if (dsize > 0) {
+                if (!PACKET_as_length_prefixed_2(&extension, &exts))
+                    return 0;
+
+                if (PACKET_remaining(&exts) > 0) {
+                    ext_data = PACKET_data(&exts);
                     sk_X509_EXTENSION_pop_free(s->tlsext_ocsp_exts,
                                                X509_EXTENSION_free);
                     s->tlsext_ocsp_exts =
-                        d2i_X509_EXTENSIONS(NULL, &sdata, dsize);
-                    if (!s->tlsext_ocsp_exts || (data + dsize != sdata))
-                        goto err;
+                        d2i_X509_EXTENSIONS(NULL, &ext_data,
+                                            PACKET_remaining(&exts));
+                    if (s->tlsext_ocsp_exts == NULL
+                        || ext_data != PACKET_end(&exts)) {
+                        return 0;
+                    }
                 }
-            }
-            /*
-             * We don't know what to do with any other type * so ignore it.
-             */
-            else
+            } else
+#endif
+            {
+                /*
+                 * We don't know what to do with any other type so ignore it.
+                 */
                 s->tlsext_status_type = -1;
+            }
         }
 #ifndef OPENSSL_NO_HEARTBEATS
-        else if (type == TLSEXT_TYPE_heartbeat) {
+        else if (SSL_IS_DTLS(s) && type == TLSEXT_TYPE_heartbeat) {
             unsigned int hbtype;
 
-            if (!PACKET_get_1(&subpkt, &hbtype)
-                    || PACKET_remaining(&subpkt)) {
+            if (!PACKET_get_1(&extension, &hbtype)
+                || PACKET_remaining(&extension)) {
                 *al = SSL_AD_DECODE_ERROR;
                 return 0;
             }
             switch (hbtype) {
             case 0x01:         /* Client allows us to send HB requests */
-                s->tlsext_heartbeat |= SSL_TLSEXT_HB_ENABLED;
+                s->tlsext_heartbeat |= SSL_DTLSEXT_HB_ENABLED;
                 break;
             case 0x02:         /* Client doesn't accept HB requests */
-                s->tlsext_heartbeat |= SSL_TLSEXT_HB_ENABLED;
-                s->tlsext_heartbeat |= SSL_TLSEXT_HB_DONT_SEND_REQUESTS;
+                s->tlsext_heartbeat |= SSL_DTLSEXT_HB_ENABLED;
+                s->tlsext_heartbeat |= SSL_DTLSEXT_HB_DONT_SEND_REQUESTS;
                 break;
             default:
                 *al = SSL_AD_ILLEGAL_PARAMETER;
@@ -2224,15 +2116,14 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
 #endif
 #ifndef OPENSSL_NO_NEXTPROTONEG
         else if (type == TLSEXT_TYPE_next_proto_neg &&
-                 s->s3->tmp.finish_md_len == 0 &&
-                 s->s3->alpn_selected == NULL) {
+                 s->s3->tmp.finish_md_len == 0) {
             /*-
              * We shouldn't accept this extension on a
              * renegotiation.
              *
              * s->new_session will be set on renegotiation, but we
              * probably shouldn't rely that it couldn't be set on
-             * the initial renegotation too in certain cases (when
+             * the initial renegotiation too in certain cases (when
              * there's some other reason to disallow resuming an
              * earlier session -- the current code won't be doing
              * anything like that, but this might change).
@@ -2248,31 +2139,26 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
 #endif
 
         else if (type == TLSEXT_TYPE_application_layer_protocol_negotiation &&
-                 s->ctx->alpn_select_cb && s->s3->tmp.finish_md_len == 0) {
-            if (tls1_alpn_handle_client_hello(s, &subpkt, al) != 0)
+                 s->s3->tmp.finish_md_len == 0) {
+            if (!tls1_alpn_handle_client_hello(s, &extension, al))
                 return 0;
-#ifndef OPENSSL_NO_NEXTPROTONEG
-            /* ALPN takes precedence over NPN. */
-            s->s3->next_proto_neg_seen = 0;
-#endif
         }
 
         /* session ticket processed earlier */
 #ifndef OPENSSL_NO_SRTP
         else if (SSL_IS_DTLS(s) && SSL_get_srtp_profiles(s)
                  && type == TLSEXT_TYPE_use_srtp) {
-            if (ssl_parse_clienthello_use_srtp_ext(s, &subpkt, al))
+            if (ssl_parse_clienthello_use_srtp_ext(s, &extension, al))
                 return 0;
         }
 #endif
-#ifdef TLSEXT_TYPE_encrypt_then_mac
         else if (type == TLSEXT_TYPE_encrypt_then_mac)
             s->s3->flags |= TLS1_FLAGS_ENCRYPT_THEN_MAC;
-#endif
-        else if (type == TLSEXT_TYPE_extended_master_secret) {
-            if (!s->hit)
-                s->session->flags |= SSL_SESS_FLAG_EXTMS;
-        }
+        /*
+         * Note: extended master secret extension handled in
+         * tls_check_serverhello_tlsext_early()
+         */
+
         /*
          * If this ClientHello extension was unhandled and this is a
          * nonresumed connection, check whether the extension is a custom
@@ -2281,14 +2167,19 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
          * ServerHello may be later returned.
          */
         else if (!s->hit) {
-            if (custom_ext_parse(s, 1, type, data, size, al) <= 0)
+            if (custom_ext_parse(s, 1, type, PACKET_data(&extension),
+                                 PACKET_remaining(&extension), al) <= 0)
                 return 0;
         }
     }
 
-    /* Spurious data on the end */
-    if (PACKET_remaining(pkt) != 0)
-        goto err;
+    if (PACKET_remaining(pkt) != 0) {
+        /*
+         * tls1_check_duplicate_extensions should ensure this never happens.
+         */
+        *al = SSL_AD_INTERNAL_ERROR;
+        return 0;
+    }
 
  ri_check:
 
@@ -2302,10 +2193,13 @@ static int ssl_scan_clienthello_tlsext(SSL *s, PACKET *pkt, int *al)
         return 0;
     }
 
+    /*
+     * This function currently has no state to clean up, so it returns directly.
+     * If parsing fails at any point, the function returns early.
+     * The SSL object may be left with partial data from extensions, but it must
+     * then no longer be used, and clearing it up will free the leftovers.
+     */
     return 1;
-err:
-    *al = SSL_AD_DECODE_ERROR;
-    return 0;
 }
 
 int ssl_parse_clienthello_tlsext(SSL *s, PACKET *pkt)
@@ -2316,7 +2210,6 @@ int ssl_parse_clienthello_tlsext(SSL *s, PACKET *pkt)
         ssl3_send_alert(s, SSL3_AL_FATAL, al);
         return 0;
     }
-
     if (ssl_check_clienthello_tlsext_early(s) <= 0) {
         SSLerr(SSL_F_SSL_PARSE_CLIENTHELLO_TLSEXT, SSL_R_CLIENTHELLO_TLSEXT);
         return 0;
@@ -2332,11 +2225,11 @@ int ssl_parse_clienthello_tlsext(SSL *s, PACKET *pkt)
  */
 static char ssl_next_proto_validate(PACKET *pkt)
 {
-    unsigned int len;
+    PACKET tmp_protocol;
 
     while (PACKET_remaining(pkt)) {
-        if (!PACKET_get_1(pkt, &len)
-                || !PACKET_forward(pkt, len))
+        if (!PACKET_get_length_prefixed_1(pkt, &tmp_protocol)
+            || PACKET_remaining(&tmp_protocol) == 0)
             return 0;
     }
 
@@ -2358,13 +2251,13 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
     OPENSSL_free(s->s3->alpn_selected);
     s->s3->alpn_selected = NULL;
 #ifndef OPENSSL_NO_HEARTBEATS
-    s->tlsext_heartbeat &= ~(SSL_TLSEXT_HB_ENABLED |
-                             SSL_TLSEXT_HB_DONT_SEND_REQUESTS);
+    s->tlsext_heartbeat &= ~(SSL_DTLSEXT_HB_ENABLED |
+                             SSL_DTLSEXT_HB_DONT_SEND_REQUESTS);
 #endif
 
-#ifdef TLSEXT_TYPE_encrypt_then_mac
     s->s3->flags &= ~TLS1_FLAGS_ENCRYPT_THEN_MAC;
-#endif
+
+    s->s3->flags &= ~TLS1_FLAGS_RECEIVED_EXTMS;
 
     if (!PACKET_get_net_2(pkt, &length))
         goto ri_check;
@@ -2374,12 +2267,17 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
         return 0;
     }
 
+    if (!tls1_check_duplicate_extensions(pkt)) {
+        *al = SSL_AD_DECODE_ERROR;
+        return 0;
+    }
+
     while (PACKET_get_net_2(pkt, &type) && PACKET_get_net_2(pkt, &size)) {
-        unsigned char *data;
+        const unsigned char *data;
         PACKET spkt;
 
         if (!PACKET_get_sub_packet(pkt, &spkt, size)
-                ||  !PACKET_peek_bytes(&spkt, &data, size))
+            || !PACKET_peek_bytes(&spkt, &data, size))
             goto ri_check;
 
         if (s->tlsext_debug_cb)
@@ -2401,7 +2299,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
         else if (type == TLSEXT_TYPE_ec_point_formats) {
             unsigned int ecpointformatlist_length;
             if (!PACKET_get_1(&spkt, &ecpointformatlist_length)
-                    || ecpointformatlist_length != size - 1) {
+                || ecpointformatlist_length != size - 1) {
                 *al = TLS1_AD_DECODE_ERROR;
                 return 0;
             }
@@ -2424,7 +2322,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
 
             }
         }
-#endif                         /* OPENSSL_NO_EC */
+#endif                          /* OPENSSL_NO_EC */
 
         else if (type == TLSEXT_TYPE_session_ticket) {
             if (s->tls_session_ticket_ext_cb &&
@@ -2439,8 +2337,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
                 return 0;
             }
             s->tlsext_ticket_expected = 1;
-        }
-        else if (type == TLSEXT_TYPE_status_request) {
+        } else if (type == TLSEXT_TYPE_status_request) {
             /*
              * MUST be empty and only sent if we've requested a status
              * request message.
@@ -2452,6 +2349,30 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
             /* Set flag to expect CertificateStatus message */
             s->tlsext_status_expected = 1;
         }
+#ifndef OPENSSL_NO_CT
+        /*
+         * Only take it if we asked for it - i.e if there is no CT validation
+         * callback set, then a custom extension MAY be processing it, so we
+         * need to let control continue to flow to that.
+         */
+        else if (type == TLSEXT_TYPE_signed_certificate_timestamp &&
+                 s->ct_validation_callback != NULL) {
+            /* Simply copy it off for later processing */
+            if (s->tlsext_scts != NULL) {
+                OPENSSL_free(s->tlsext_scts);
+                s->tlsext_scts = NULL;
+            }
+            s->tlsext_scts_len = size;
+            if (size > 0) {
+                s->tlsext_scts = OPENSSL_malloc(size);
+                if (s->tlsext_scts == NULL) {
+                    *al = TLS1_AD_INTERNAL_ERROR;
+                    return 0;
+                }
+                memcpy(s->tlsext_scts, data, size);
+            }
+        }
+#endif
 #ifndef OPENSSL_NO_NEXTPROTONEG
         else if (type == TLSEXT_TYPE_next_proto_neg &&
                  s->s3->tmp.finish_md_len == 0) {
@@ -2467,10 +2388,10 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
                 *al = TLS1_AD_DECODE_ERROR;
                 return 0;
             }
-            if (s->
-                ctx->next_proto_select_cb(s, &selected, &selected_len, data,
-                                          size,
-                                          s->ctx->next_proto_select_cb_arg) !=
+            if (s->ctx->next_proto_select_cb(s, &selected, &selected_len, data,
+                                             size,
+                                             s->
+                                             ctx->next_proto_select_cb_arg) !=
                 SSL_TLSEXT_ERR_OK) {
                 *al = TLS1_AD_INTERNAL_ERROR;
                 return 0;
@@ -2489,7 +2410,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
         else if (type == TLSEXT_TYPE_application_layer_protocol_negotiation) {
             unsigned len;
             /* We must have requested it. */
-            if (s->alpn_client_proto_list == NULL) {
+            if (!s->s3->alpn_sent) {
                 *al = TLS1_AD_UNSUPPORTED_EXTENSION;
                 return 0;
             }
@@ -2500,9 +2421,8 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
              *   uint8 proto[proto_length];
              */
             if (!PACKET_get_net_2(&spkt, &len)
-                    || PACKET_remaining(&spkt) != len
-                    || !PACKET_get_1(&spkt, &len)
-                    || PACKET_remaining(&spkt) != len) {
+                || PACKET_remaining(&spkt) != len || !PACKET_get_1(&spkt, &len)
+                || PACKET_remaining(&spkt) != len) {
                 *al = TLS1_AD_DECODE_ERROR;
                 return 0;
             }
@@ -2519,7 +2439,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
             s->s3->alpn_selected_len = len;
         }
 #ifndef OPENSSL_NO_HEARTBEATS
-        else if (type == TLSEXT_TYPE_heartbeat) {
+        else if (SSL_IS_DTLS(s) && type == TLSEXT_TYPE_heartbeat) {
             unsigned int hbtype;
             if (!PACKET_get_1(&spkt, &hbtype)) {
                 *al = SSL_AD_DECODE_ERROR;
@@ -2527,11 +2447,11 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
             }
             switch (hbtype) {
             case 0x01:         /* Server allows us to send HB requests */
-                s->tlsext_heartbeat |= SSL_TLSEXT_HB_ENABLED;
+                s->tlsext_heartbeat |= SSL_DTLSEXT_HB_ENABLED;
                 break;
             case 0x02:         /* Server doesn't accept HB requests */
-                s->tlsext_heartbeat |= SSL_TLSEXT_HB_ENABLED;
-                s->tlsext_heartbeat |= SSL_TLSEXT_HB_DONT_SEND_REQUESTS;
+                s->tlsext_heartbeat |= SSL_DTLSEXT_HB_ENABLED;
+                s->tlsext_heartbeat |= SSL_DTLSEXT_HB_DONT_SEND_REQUESTS;
                 break;
             default:
                 *al = SSL_AD_ILLEGAL_PARAMETER;
@@ -2545,15 +2465,13 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
                 return 0;
         }
 #endif
-#ifdef TLSEXT_TYPE_encrypt_then_mac
         else if (type == TLSEXT_TYPE_encrypt_then_mac) {
             /* Ignore if inappropriate ciphersuite */
             if (s->s3->tmp.new_cipher->algorithm_mac != SSL_AEAD
                 && s->s3->tmp.new_cipher->algorithm_enc != SSL_RC4)
                 s->s3->flags |= TLS1_FLAGS_ENCRYPT_THEN_MAC;
-        }
-#endif
-        else if (type == TLSEXT_TYPE_extended_master_secret) {
+        } else if (type == TLSEXT_TYPE_extended_master_secret) {
+            s->s3->flags |= TLS1_FLAGS_RECEIVED_EXTMS;
             if (!s->hit)
                 s->session->flags |= SSL_SESS_FLAG_EXTMS;
         }
@@ -2573,7 +2491,8 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
     if (!s->hit && tlsext_servername == 1) {
         if (s->tlsext_hostname) {
             if (s->session->tlsext_hostname == NULL) {
-                s->session->tlsext_hostname = BUF_strdup(s->tlsext_hostname);
+                s->session->tlsext_hostname =
+                    OPENSSL_strdup(s->tlsext_hostname);
                 if (!s->session->tlsext_hostname) {
                     *al = SSL_AD_UNRECOGNIZED_NAME;
                     return 0;
@@ -2592,8 +2511,7 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
      * an attack we should *always* see RI even on initial server hello
      * because the client doesn't see any renegotiation during an attack.
      * However this would mean we could not connect to any server which
-     * doesn't support RI so for the immediate future tolerate RI absence on
-     * initial connect only.
+     * doesn't support RI so for the immediate future tolerate RI absence
      */
     if (!renegotiate_seen && !(s->options & SSL_OP_LEGACY_SERVER_CONNECT)
         && !(s->options & SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION)) {
@@ -2603,12 +2521,25 @@ static int ssl_scan_serverhello_tlsext(SSL *s, PACKET *pkt, int *al)
         return 0;
     }
 
+    if (s->hit) {
+        /*
+         * Check extended master secret extension is consistent with
+         * original session.
+         */
+        if (!(s->s3->flags & TLS1_FLAGS_RECEIVED_EXTMS) !=
+            !(s->session->flags & SSL_SESS_FLAG_EXTMS)) {
+            *al = SSL_AD_HANDSHAKE_FAILURE;
+            SSLerr(SSL_F_SSL_SCAN_SERVERHELLO_TLSEXT, SSL_R_INCONSISTENT_EXTMS);
+            return 0;
+        }
+    }
+
     return 1;
 }
 
 int ssl_prepare_clienthello_tlsext(SSL *s)
 {
-
+    s->s3->alpn_sent = 0;
     return 1;
 }
 
@@ -2659,6 +2590,7 @@ static int ssl_check_clienthello_tlsext_early(SSL *s)
         return 1;
     }
 }
+
 /* Initialise digests to default values */
 void ssl_set_default_md(SSL *s)
 {
@@ -2687,7 +2619,8 @@ int tls1_set_server_sigalgs(SSL *s)
 {
     int al;
     size_t i;
-    /* Clear any shared sigtnature algorithms */
+
+    /* Clear any shared signature algorithms */
     OPENSSL_free(s->cert->shared_sigalgs);
     s->cert->shared_sigalgs = NULL;
     s->cert->shared_sigalgslen = 0;
@@ -2707,7 +2640,7 @@ int tls1_set_server_sigalgs(SSL *s)
         /* Fatal error is no shared signature algorithms */
         if (!s->cert->shared_sigalgs) {
             SSLerr(SSL_F_TLS1_SET_SERVER_SIGALGS,
-                   SSL_R_NO_SHARED_SIGATURE_ALGORITHMS);
+                   SSL_R_NO_SHARED_SIGNATURE_ALGORITHMS);
             al = SSL_AD_ILLEGAL_PARAMETER;
             goto err;
         }
@@ -2720,10 +2653,13 @@ int tls1_set_server_sigalgs(SSL *s)
     return 0;
 }
 
-int ssl_check_clienthello_tlsext_late(SSL *s)
+/*
+ * Upon success, returns 1.
+ * Upon failure, returns 0 and sets |al| to the appropriate fatal alert.
+ */
+int ssl_check_clienthello_tlsext_late(SSL *s, int *al)
 {
-    int ret = SSL_TLSEXT_ERR_OK;
-    int al = SSL_AD_INTERNAL_ERROR;
+    s->tlsext_status_expected = 0;
 
     /*
      * If status request then ask callback what to do. Note: this must be
@@ -2732,54 +2668,41 @@ int ssl_check_clienthello_tlsext_late(SSL *s)
      * influence which certificate is sent
      */
     if ((s->tlsext_status_type != -1) && s->ctx && s->ctx->tlsext_status_cb) {
-        int r;
+        int ret;
         CERT_PKEY *certpkey;
         certpkey = ssl_get_server_send_pkey(s);
         /* If no certificate can't return certificate status */
-        if (certpkey == NULL) {
-            s->tlsext_status_expected = 0;
-            return 1;
-        }
-        /*
-         * Set current certificate to one we will use so SSL_get_certificate
-         * et al can pick it up.
-         */
-        s->cert->key = certpkey;
-        r = s->ctx->tlsext_status_cb(s, s->ctx->tlsext_status_arg);
-        switch (r) {
-            /* We don't want to send a status request response */
-        case SSL_TLSEXT_ERR_NOACK:
-            s->tlsext_status_expected = 0;
-            break;
-            /* status request response should be sent */
-        case SSL_TLSEXT_ERR_OK:
-            if (s->tlsext_ocsp_resp)
-                s->tlsext_status_expected = 1;
-            else
+        if (certpkey != NULL) {
+            /*
+             * Set current certificate to one we will use so SSL_get_certificate
+             * et al can pick it up.
+             */
+            s->cert->key = certpkey;
+            ret = s->ctx->tlsext_status_cb(s, s->ctx->tlsext_status_arg);
+            switch (ret) {
+                /* We don't want to send a status request response */
+            case SSL_TLSEXT_ERR_NOACK:
                 s->tlsext_status_expected = 0;
-            break;
-            /* something bad happened */
-        case SSL_TLSEXT_ERR_ALERT_FATAL:
-            ret = SSL_TLSEXT_ERR_ALERT_FATAL;
-            al = SSL_AD_INTERNAL_ERROR;
-            goto err;
+                break;
+                /* status request response should be sent */
+            case SSL_TLSEXT_ERR_OK:
+                if (s->tlsext_ocsp_resp)
+                    s->tlsext_status_expected = 1;
+                break;
+                /* something bad happened */
+            case SSL_TLSEXT_ERR_ALERT_FATAL:
+            default:
+                *al = SSL_AD_INTERNAL_ERROR;
+                return 0;
+            }
         }
-    } else
-        s->tlsext_status_expected = 0;
-
- err:
-    switch (ret) {
-    case SSL_TLSEXT_ERR_ALERT_FATAL:
-        ssl3_send_alert(s, SSL3_AL_FATAL, al);
-        return -1;
-
-    case SSL_TLSEXT_ERR_ALERT_WARNING:
-        ssl3_send_alert(s, SSL3_AL_WARNING, al);
-        return 1;
-
-    default:
-        return 1;
     }
+
+    if (!tls1_alpn_handle_client_hello_late(s, al)) {
+        return 0;
+    }
+
+    return 1;
 }
 
 int ssl_check_serverhello_tlsext(SSL *s)
@@ -2799,8 +2722,7 @@ int ssl_check_serverhello_tlsext(SSL *s)
         && (s->tlsext_ecpointformatlist_length > 0)
         && (s->session->tlsext_ecpointformatlist != NULL)
         && (s->session->tlsext_ecpointformatlist_length > 0)
-        && ((alg_k & (SSL_kECDHE | SSL_kECDHr | SSL_kECDHe))
-            || (alg_a & SSL_aECDSA))) {
+        && ((alg_k & SSL_kECDHE) || (alg_a & SSL_aECDSA))) {
         /* we are using an ECC cipher */
         size_t i;
         unsigned char *list;
@@ -2819,7 +2741,7 @@ int ssl_check_serverhello_tlsext(SSL *s)
         }
     }
     ret = SSL_TLSEXT_ERR_OK;
-#endif                         /* OPENSSL_NO_EC */
+#endif                          /* OPENSSL_NO_EC */
 
     if (s->ctx != NULL && s->ctx->tlsext_servername_callback != 0)
         ret =
@@ -2833,29 +2755,12 @@ int ssl_check_serverhello_tlsext(SSL *s)
                                                        initial_ctx->tlsext_servername_arg);
 
     /*
-     * If we've requested certificate status and we wont get one tell the
-     * callback
+     * Ensure we get sensible values passed to tlsext_status_cb in the event
+     * that we don't receive a status message
      */
-    if ((s->tlsext_status_type != -1) && !(s->tlsext_status_expected)
-        && s->ctx && s->ctx->tlsext_status_cb) {
-        int r;
-        /*
-         * Set resp to NULL, resplen to -1 so callback knows there is no
-         * response.
-         */
-        OPENSSL_free(s->tlsext_ocsp_resp);
-        s->tlsext_ocsp_resp = NULL;
-        s->tlsext_ocsp_resplen = -1;
-        r = s->ctx->tlsext_status_cb(s, s->ctx->tlsext_status_arg);
-        if (r == 0) {
-            al = SSL_AD_BAD_CERTIFICATE_STATUS_RESPONSE;
-            ret = SSL_TLSEXT_ERR_ALERT_FATAL;
-        }
-        if (r < 0) {
-            al = SSL_AD_INTERNAL_ERROR;
-            ret = SSL_TLSEXT_ERR_ALERT_FATAL;
-        }
-    }
+    OPENSSL_free(s->tlsext_ocsp_resp);
+    s->tlsext_ocsp_resp = NULL;
+    s->tlsext_ocsp_resplen = -1;
 
     switch (ret) {
     case SSL_TLSEXT_ERR_ALERT_FATAL:
@@ -2892,8 +2797,11 @@ int ssl_parse_serverhello_tlsext(SSL *s, PACKET *pkt)
 
 /*-
  * Since the server cache lookup is done early on in the processing of the
- * ClientHello, and other operations depend on the result, we need to handle
- * any TLS session ticket extension at the same time.
+ * ClientHello and other operations depend on the result some extensions
+ * need to be handled at the same time.
+ *
+ * Two extensions are currently handled, session ticket and extended master
+ * secret.
  *
  *   session_id: ClientHello session ID.
  *   ext: ClientHello extensions (including length prefix)
@@ -2920,23 +2828,29 @@ int ssl_parse_serverhello_tlsext(SSL *s, PACKET *pkt)
  *   a session ticket or we couldn't use the one it gave us, or if
  *   s->ctx->tlsext_ticket_key_cb asked to renew the client's ticket.
  *   Otherwise, s->tlsext_ticket_expected is set to 0.
+ *
+ *   For extended master secret flag is set if the extension is present.
+ *
  */
-int tls1_process_ticket(SSL *s, const PACKET *ext, const PACKET *session_id,
-                        SSL_SESSION **ret)
+int tls_check_serverhello_tlsext_early(SSL *s, const PACKET *ext,
+                                       const PACKET *session_id,
+                                       SSL_SESSION **ret)
 {
     unsigned int i;
     PACKET local_ext = *ext;
     int retv = -1;
 
+    int have_ticket = 0;
+    int use_ticket = tls_use_ticket(s);
+
     *ret = NULL;
     s->tlsext_ticket_expected = 0;
+    s->s3->flags &= ~TLS1_FLAGS_RECEIVED_EXTMS;
 
     /*
      * If tickets disabled behave as if no ticket present to permit stateful
      * resumption.
      */
-    if (!tls_use_ticket(s))
-        return 0;
     if ((s->version <= SSL3_VERSION))
         return 0;
 
@@ -2948,7 +2862,7 @@ int tls1_process_ticket(SSL *s, const PACKET *ext, const PACKET *session_id,
         unsigned int type, size;
 
         if (!PACKET_get_net_2(&local_ext, &type)
-                || !PACKET_get_net_2(&local_ext, &size)) {
+            || !PACKET_get_net_2(&local_ext, &size)) {
             /* Shouldn't ever happen */
             retv = -1;
             goto end;
@@ -2957,9 +2871,16 @@ int tls1_process_ticket(SSL *s, const PACKET *ext, const PACKET *session_id,
             retv = 0;
             goto end;
         }
-        if (type == TLSEXT_TYPE_session_ticket) {
+        if (type == TLSEXT_TYPE_session_ticket && use_ticket) {
             int r;
-            unsigned char *etick;
+            const unsigned char *etick;
+
+            /* Duplicate extension */
+            if (have_ticket != 0) {
+                retv = -1;
+                goto end;
+            }
+            have_ticket = 1;
 
             if (size == 0) {
                 /*
@@ -2968,7 +2889,7 @@ int tls1_process_ticket(SSL *s, const PACKET *ext, const PACKET *session_id,
                  */
                 s->tlsext_ticket_expected = 1;
                 retv = 1;
-                goto end;
+                continue;
             }
             if (s->tls_session_secret_cb) {
                 /*
@@ -2978,7 +2899,7 @@ int tls1_process_ticket(SSL *s, const PACKET *ext, const PACKET *session_id,
                  * calculate the master secret later.
                  */
                 retv = 2;
-                goto end;
+                continue;
             }
             if (!PACKET_get_bytes(&local_ext, &etick, size)) {
                 /* Shouldn't ever happen */
@@ -3003,16 +2924,19 @@ int tls1_process_ticket(SSL *s, const PACKET *ext, const PACKET *session_id,
                 retv = -1;
                 break;
             }
-            goto end;
+            continue;
         } else {
+            if (type == TLSEXT_TYPE_extended_master_secret)
+                s->s3->flags |= TLS1_FLAGS_RECEIVED_EXTMS;
             if (!PACKET_forward(&local_ext, size)) {
                 retv = -1;
                 goto end;
             }
         }
     }
-    retv = 0;
-end:
+    if (have_ticket == 0)
+        retv = 0;
+ end:
     return retv;
 }
 
@@ -3020,13 +2944,14 @@ end:
  * tls_decrypt_ticket attempts to decrypt a session ticket.
  *
  *   etick: points to the body of the session ticket extension.
- *   eticklen: the length of the session tickets extenion.
+ *   eticklen: the length of the session tickets extension.
  *   sess_id: points at the session ID.
  *   sesslen: the length of the session ID.
  *   psess: (output) on return, if a ticket was decrypted, then this is set to
  *       point to the resulting session.
  *
  * Returns:
+ *   -2: fatal error, malloc failure.
  *   -1: fatal error, either from parsing or decrypting the ticket.
  *    2: the ticket couldn't be decrypted.
  *    3: a ticket was successfully decrypted and *psess was set.
@@ -3039,75 +2964,89 @@ static int tls_decrypt_ticket(SSL *s, const unsigned char *etick,
     SSL_SESSION *sess;
     unsigned char *sdec;
     const unsigned char *p;
-    int slen, mlen, renew_ticket = 0;
+    int slen, mlen, renew_ticket = 0, ret = -1;
     unsigned char tick_hmac[EVP_MAX_MD_SIZE];
-    HMAC_CTX hctx;
-    EVP_CIPHER_CTX ctx;
+    HMAC_CTX *hctx = NULL;
+    EVP_CIPHER_CTX *ctx;
     SSL_CTX *tctx = s->initial_ctx;
     /* Need at least keyname + iv + some encrypted data */
     if (eticklen < 48)
         return 2;
     /* Initialize session ticket encryption and HMAC contexts */
-    HMAC_CTX_init(&hctx);
-    EVP_CIPHER_CTX_init(&ctx);
+    hctx = HMAC_CTX_new();
+    if (hctx == NULL)
+        return -2;
+    ctx = EVP_CIPHER_CTX_new();
+    if (ctx == NULL) {
+        ret = -2;
+        goto err;
+    }
     if (tctx->tlsext_ticket_key_cb) {
         unsigned char *nctick = (unsigned char *)etick;
         int rv = tctx->tlsext_ticket_key_cb(s, nctick, nctick + 16,
-                                            &ctx, &hctx, 0);
+                                            ctx, hctx, 0);
         if (rv < 0)
-            return -1;
-        if (rv == 0)
-            return 2;
+            goto err;
+        if (rv == 0) {
+            ret = 2;
+            goto err;
+        }
         if (rv == 2)
             renew_ticket = 1;
     } else {
         /* Check key name matches */
-        if (memcmp(etick, tctx->tlsext_tick_key_name, 16))
-            return 2;
-        if (HMAC_Init_ex(&hctx, tctx->tlsext_tick_hmac_key, 16,
-                         EVP_sha256(), NULL) <= 0
-                || EVP_DecryptInit_ex(&ctx, EVP_aes_128_cbc(), NULL,
-                                      tctx->tlsext_tick_aes_key,
-                                      etick + 16) <= 0) {
+        if (memcmp(etick, tctx->tlsext_tick_key_name,
+                   sizeof(tctx->tlsext_tick_key_name)) != 0) {
+            ret = 2;
             goto err;
-       }
+        }
+        if (HMAC_Init_ex(hctx, tctx->tlsext_tick_hmac_key,
+                         sizeof(tctx->tlsext_tick_hmac_key),
+                         EVP_sha256(), NULL) <= 0
+            || EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL,
+                                  tctx->tlsext_tick_aes_key,
+                                  etick + sizeof(tctx->tlsext_tick_key_name)) <=
+            0) {
+            goto err;
+        }
     }
     /*
      * Attempt to process session ticket, first conduct sanity and integrity
      * checks on ticket.
      */
-    mlen = HMAC_size(&hctx);
+    mlen = HMAC_size(hctx);
     if (mlen < 0) {
         goto err;
     }
     eticklen -= mlen;
     /* Check HMAC of encrypted ticket */
-    if (HMAC_Update(&hctx, etick, eticklen) <= 0
-            || HMAC_Final(&hctx, tick_hmac, NULL) <= 0) {
+    if (HMAC_Update(hctx, etick, eticklen) <= 0
+        || HMAC_Final(hctx, tick_hmac, NULL) <= 0) {
         goto err;
     }
-    HMAC_CTX_cleanup(&hctx);
+    HMAC_CTX_free(hctx);
     if (CRYPTO_memcmp(tick_hmac, etick + eticklen, mlen)) {
-        EVP_CIPHER_CTX_cleanup(&ctx);
+        EVP_CIPHER_CTX_free(ctx);
         return 2;
     }
     /* Attempt to decrypt session data */
     /* Move p after IV to start of encrypted ticket, update length */
-    p = etick + 16 + EVP_CIPHER_CTX_iv_length(&ctx);
-    eticklen -= 16 + EVP_CIPHER_CTX_iv_length(&ctx);
+    p = etick + 16 + EVP_CIPHER_CTX_iv_length(ctx);
+    eticklen -= 16 + EVP_CIPHER_CTX_iv_length(ctx);
     sdec = OPENSSL_malloc(eticklen);
-    if (sdec == NULL
-            || EVP_DecryptUpdate(&ctx, sdec, &slen, p, eticklen) <= 0) {
-        EVP_CIPHER_CTX_cleanup(&ctx);
+    if (sdec == NULL || EVP_DecryptUpdate(ctx, sdec, &slen, p, eticklen) <= 0) {
+        EVP_CIPHER_CTX_free(ctx);
+        OPENSSL_free(sdec);
         return -1;
     }
-    if (EVP_DecryptFinal(&ctx, sdec + slen, &mlen) <= 0) {
-        EVP_CIPHER_CTX_cleanup(&ctx);
+    if (EVP_DecryptFinal(ctx, sdec + slen, &mlen) <= 0) {
+        EVP_CIPHER_CTX_free(ctx);
         OPENSSL_free(sdec);
         return 2;
     }
     slen += mlen;
-    EVP_CIPHER_CTX_cleanup(&ctx);
+    EVP_CIPHER_CTX_free(ctx);
+    ctx = NULL;
     p = sdec;
 
     sess = d2i_SSL_SESSION(NULL, &p, slen);
@@ -3133,10 +3072,10 @@ static int tls_decrypt_ticket(SSL *s, const unsigned char *etick,
      * For session parse failure, indicate that we need to send a new ticket.
      */
     return 2;
-err:
-    EVP_CIPHER_CTX_cleanup(&ctx);
-    HMAC_CTX_cleanup(&hctx);
-    return -1;
+ err:
+    EVP_CIPHER_CTX_free(ctx);
+    HMAC_CTX_free(hctx);
+    return ret;
 }
 
 /* Tables to translate from NIDs to TLS v1.2 ids */
@@ -3187,8 +3126,7 @@ static int tls12_find_nid(int id, const tls12_lookup *table, size_t tlen)
     return NID_undef;
 }
 
-int tls12_get_sigandhash(unsigned char *p, const EVP_PKEY *pk,
-                         const EVP_MD *md)
+int tls12_get_sigandhash(unsigned char *p, const EVP_PKEY *pk, const EVP_MD *md)
 {
     int sig_id, md_id;
     if (!md)
@@ -3206,7 +3144,7 @@ int tls12_get_sigandhash(unsigned char *p, const EVP_PKEY *pk,
 
 int tls12_get_sigid(const EVP_PKEY *pk)
 {
-    return tls12_find_id(pk->type, tls12_sig, OSSL_NELEM(tls12_sig));
+    return tls12_find_id(EVP_PKEY_id(pk), tls12_sig, OSSL_NELEM(tls12_sig));
 }
 
 typedef struct {
@@ -3223,9 +3161,11 @@ static const tls12_hash_info tls12_md_info[] = {
     {NID_sha256, 128, SSL_MD_SHA256_IDX, TLSEXT_hash_sha256},
     {NID_sha384, 192, SSL_MD_SHA384_IDX, TLSEXT_hash_sha384},
     {NID_sha512, 256, SSL_MD_SHA512_IDX, TLSEXT_hash_sha512},
-    {NID_id_GostR3411_94,       128, SSL_MD_GOST94_IDX, TLSEXT_hash_gostr3411},
-    {NID_id_GostR3411_2012_256, 128, SSL_MD_GOST12_256_IDX, TLSEXT_hash_gostr34112012_256},
-    {NID_id_GostR3411_2012_512, 256, SSL_MD_GOST12_512_IDX, TLSEXT_hash_gostr34112012_512},
+    {NID_id_GostR3411_94, 128, SSL_MD_GOST94_IDX, TLSEXT_hash_gostr3411},
+    {NID_id_GostR3411_2012_256, 128, SSL_MD_GOST12_256_IDX,
+     TLSEXT_hash_gostr34112012_256},
+    {NID_id_GostR3411_2012_512, 256, SSL_MD_GOST12_512_IDX,
+     TLSEXT_hash_gostr34112012_512},
 };
 
 static const tls12_hash_info *tls12_get_hash_info(unsigned char hash_alg)
@@ -3234,8 +3174,7 @@ static const tls12_hash_info *tls12_get_hash_info(unsigned char hash_alg)
     if (hash_alg == 0)
         return NULL;
 
-    for (i=0; i < OSSL_NELEM(tls12_md_info); i++)
-    {
+    for (i = 0; i < OSSL_NELEM(tls12_md_info); i++) {
         if (tls12_md_info[i].tlsext_hash == hash_alg)
             return tls12_md_info + i;
     }
@@ -3269,7 +3208,7 @@ static int tls12_get_pkey_idx(unsigned char sig_alg)
     case TLSEXT_signature_ecdsa:
         return SSL_PKEY_ECC;
 #endif
-# ifndef OPENSSL_NO_GOST
+#ifndef OPENSSL_NO_GOST
     case TLSEXT_signature_gostr34102001:
         return SSL_PKEY_GOST01;
 
@@ -3278,7 +3217,7 @@ static int tls12_get_pkey_idx(unsigned char sig_alg)
 
     case TLSEXT_signature_gostr34102012_512:
         return SSL_PKEY_GOST12_512;
-# endif
+#endif
     }
     return -1;
 }
@@ -3287,7 +3226,7 @@ static int tls12_get_pkey_idx(unsigned char sig_alg)
 static void tls1_lookup_sigalg(int *phash_nid, int *psign_nid,
                                int *psignhash_nid, const unsigned char *data)
 {
-    int sign_nid = 0, hash_nid = 0;
+    int sign_nid = NID_undef, hash_nid = NID_undef;
     if (!phash_nid && !psign_nid && !psignhash_nid)
         return;
     if (phash_nid || psignhash_nid) {
@@ -3301,9 +3240,8 @@ static void tls1_lookup_sigalg(int *phash_nid, int *psign_nid,
             *psign_nid = sign_nid;
     }
     if (psignhash_nid) {
-        if (sign_nid && hash_nid)
-            OBJ_find_sigid_by_algs(psignhash_nid, hash_nid, sign_nid);
-        else
+        if (sign_nid == NID_undef || hash_nid == NID_undef
+            || OBJ_find_sigid_by_algs(psignhash_nid, hash_nid, sign_nid) <= 0)
             *psignhash_nid = NID_undef;
     }
 }
@@ -3492,30 +3430,6 @@ int tls1_process_sigalgs(SSL *s)
     if (!tls1_set_shared_sigalgs(s))
         return 0;
 
-#ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
-    if (s->cert->cert_flags & SSL_CERT_FLAG_BROKEN_PROTOCOL) {
-        /*
-         * Use first set signature preference to force message digest,
-         * ignoring any peer preferences.
-         */
-        const unsigned char *sigs = NULL;
-        if (s->server)
-            sigs = c->conf_sigalgs;
-        else
-            sigs = c->client_sigalgs;
-        if (sigs) {
-            idx = tls12_get_pkey_idx(sigs[1]);
-            md = tls12_get_hash(sigs[0]);
-            pmd[idx] = md;
-            pvalid[idx] = CERT_PKEY_EXPLICIT_SIGN;
-            if (idx == SSL_PKEY_RSA_SIGN) {
-                pvalid[SSL_PKEY_RSA_ENC] = CERT_PKEY_EXPLICIT_SIGN;
-                pmd[SSL_PKEY_RSA_ENC] = md;
-            }
-        }
-    }
-#endif
-
     for (i = 0, sigptr = c->shared_sigalgs;
          i < c->shared_sigalgslen; i++, sigptr++) {
         idx = tls12_get_pkey_idx(sigptr->rsign);
@@ -3553,14 +3467,16 @@ int tls1_process_sigalgs(SSL *s)
         if (pmd[SSL_PKEY_ECC] == NULL)
             pmd[SSL_PKEY_ECC] = EVP_sha1();
 #endif
-# ifndef OPENSSL_NO_GOST
+#ifndef OPENSSL_NO_GOST
         if (pmd[SSL_PKEY_GOST01] == NULL)
             pmd[SSL_PKEY_GOST01] = EVP_get_digestbynid(NID_id_GostR3411_94);
         if (pmd[SSL_PKEY_GOST12_256] == NULL)
-            pmd[SSL_PKEY_GOST12_256] = EVP_get_digestbynid(NID_id_GostR3411_2012_256);
+            pmd[SSL_PKEY_GOST12_256] =
+                EVP_get_digestbynid(NID_id_GostR3411_2012_256);
         if (pmd[SSL_PKEY_GOST12_512] == NULL)
-            pmd[SSL_PKEY_GOST12_512] = EVP_get_digestbynid(NID_id_GostR3411_2012_512);
-# endif
+            pmd[SSL_PKEY_GOST12_512] =
+                EVP_get_digestbynid(NID_id_GostR3411_2012_512);
+#endif
     }
     return 1;
 }
@@ -3606,160 +3522,6 @@ int SSL_get_shared_sigalgs(SSL *s, int idx,
         *rhash = shsigalgs->rhash;
     return s->cert->shared_sigalgslen;
 }
-
-#ifndef OPENSSL_NO_HEARTBEATS
-int tls1_process_heartbeat(SSL *s, unsigned char *p, unsigned int length)
-{
-    unsigned char *pl;
-    unsigned short hbtype;
-    unsigned int payload;
-    unsigned int padding = 16;  /* Use minimum padding */
-
-    if (s->msg_callback)
-        s->msg_callback(0, s->version, TLS1_RT_HEARTBEAT,
-                        p, length,
-                        s, s->msg_callback_arg);
-
-    /* Read type and payload length first */
-    if (1 + 2 + 16 > length)
-        return 0;               /* silently discard */
-    hbtype = *p++;
-    n2s(p, payload);
-    if (1 + 2 + payload + 16 > length)
-        return 0;               /* silently discard per RFC 6520 sec. 4 */
-    pl = p;
-
-    if (hbtype == TLS1_HB_REQUEST) {
-        unsigned char *buffer, *bp;
-        int r;
-
-        /*
-         * Allocate memory for the response, size is 1 bytes message type,
-         * plus 2 bytes payload length, plus payload, plus padding
-         */
-        buffer = OPENSSL_malloc(1 + 2 + payload + padding);
-        if (buffer == NULL) {
-            SSLerr(SSL_F_TLS1_PROCESS_HEARTBEAT, ERR_R_MALLOC_FAILURE);
-            return -1;
-        }
-        bp = buffer;
-
-        /* Enter response type, length and copy payload */
-        *bp++ = TLS1_HB_RESPONSE;
-        s2n(payload, bp);
-        memcpy(bp, pl, payload);
-        bp += payload;
-        /* Random padding */
-        if (RAND_bytes(bp, padding) <= 0) {
-            OPENSSL_free(buffer);
-            return -1;
-        }
-
-        r = ssl3_write_bytes(s, TLS1_RT_HEARTBEAT, buffer,
-                             3 + payload + padding);
-
-        if (r >= 0 && s->msg_callback)
-            s->msg_callback(1, s->version, TLS1_RT_HEARTBEAT,
-                            buffer, 3 + payload + padding,
-                            s, s->msg_callback_arg);
-
-        OPENSSL_free(buffer);
-
-        if (r < 0)
-            return r;
-    } else if (hbtype == TLS1_HB_RESPONSE) {
-        unsigned int seq;
-
-        /*
-         * We only send sequence numbers (2 bytes unsigned int), and 16
-         * random bytes, so we just try to read the sequence number
-         */
-        n2s(pl, seq);
-
-        if (payload == 18 && seq == s->tlsext_hb_seq) {
-            s->tlsext_hb_seq++;
-            s->tlsext_hb_pending = 0;
-        }
-    }
-
-    return 0;
-}
-
-int tls1_heartbeat(SSL *s)
-{
-    unsigned char *buf, *p;
-    int ret = -1;
-    unsigned int payload = 18;  /* Sequence number + random bytes */
-    unsigned int padding = 16;  /* Use minimum padding */
-
-    /* Only send if peer supports and accepts HB requests... */
-    if (!(s->tlsext_heartbeat & SSL_TLSEXT_HB_ENABLED) ||
-        s->tlsext_heartbeat & SSL_TLSEXT_HB_DONT_SEND_REQUESTS) {
-        SSLerr(SSL_F_TLS1_HEARTBEAT, SSL_R_TLS_HEARTBEAT_PEER_DOESNT_ACCEPT);
-        return -1;
-    }
-
-    /* ...and there is none in flight yet... */
-    if (s->tlsext_hb_pending) {
-        SSLerr(SSL_F_TLS1_HEARTBEAT, SSL_R_TLS_HEARTBEAT_PENDING);
-        return -1;
-    }
-
-    /* ...and no handshake in progress. */
-    if (SSL_in_init(s) || ossl_statem_get_in_handshake(s)) {
-        SSLerr(SSL_F_TLS1_HEARTBEAT, SSL_R_UNEXPECTED_MESSAGE);
-        return -1;
-    }
-
-    /*-
-     * Create HeartBeat message, we just use a sequence number
-     * as payload to distuingish different messages and add
-     * some random stuff.
-     *  - Message Type, 1 byte
-     *  - Payload Length, 2 bytes (unsigned int)
-     *  - Payload, the sequence number (2 bytes uint)
-     *  - Payload, random bytes (16 bytes uint)
-     *  - Padding
-     */
-    buf = OPENSSL_malloc(1 + 2 + payload + padding);
-    if (buf == NULL) {
-        SSLerr(SSL_F_TLS1_HEARTBEAT, ERR_R_MALLOC_FAILURE);
-        return -1;
-    }
-    p = buf;
-    /* Message Type */
-    *p++ = TLS1_HB_REQUEST;
-    /* Payload length (18 bytes here) */
-    s2n(payload, p);
-    /* Sequence number */
-    s2n(s->tlsext_hb_seq, p);
-    /* 16 random bytes */
-    if (RAND_bytes(p, 16) <= 0) {
-        SSLerr(SSL_F_TLS1_HEARTBEAT, ERR_R_INTERNAL_ERROR);
-        goto err;
-    }
-    p += 16;
-    /* Random padding */
-    if (RAND_bytes(p, padding) <= 0) {
-        SSLerr(SSL_F_TLS1_HEARTBEAT, ERR_R_INTERNAL_ERROR);
-        goto err;
-    }
-
-    ret = ssl3_write_bytes(s, TLS1_RT_HEARTBEAT, buf, 3 + payload + padding);
-    if (ret >= 0) {
-        if (s->msg_callback)
-            s->msg_callback(1, s->version, TLS1_RT_HEARTBEAT,
-                            buf, 3 + payload + padding,
-                            s, s->msg_callback_arg);
-
-        s->tlsext_hb_pending = 1;
-    }
-
- err:
-    OPENSSL_free(buf);
-    return ret;
-}
-#endif
 
 #define MAX_SIGALGLEN   (TLSEXT_hash_num * TLSEXT_signature_num * 2)
 
@@ -3821,7 +3583,7 @@ static int sig_cb(const char *elem, int len, void *arg)
 }
 
 /*
- * Set suppored signature algorithms based on a colon separated list of the
+ * Set supported signature algorithms based on a colon separated list of the
  * form sig+hash e.g. RSA+SHA512:DSA+SHA512
  */
 int tls1_set_sigalgs_list(CERT *c, const char *str, int client)
@@ -3835,8 +3597,7 @@ int tls1_set_sigalgs_list(CERT *c, const char *str, int client)
     return tls1_set_sigalgs(c, sig.sigalgs, sig.sigalgcnt, client);
 }
 
-int tls1_set_sigalgs(CERT *c, const int *psig_nids, size_t salglen,
-                     int client)
+int tls1_set_sigalgs(CERT *c, const int *psig_nids, size_t salglen, int client)
 {
     unsigned char *sigalgs, *sptr;
     int rhash, rsign;
@@ -3943,15 +3704,6 @@ int tls1_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain,
         /* If no cert or key, forget it */
         if (!x || !pk)
             goto end;
-#ifdef OPENSSL_SSL_DEBUG_BROKEN_PROTOCOL
-        /* Allow any certificate to pass test */
-        if (s->cert->cert_flags & SSL_CERT_FLAG_BROKEN_PROTOCOL) {
-            rv = CERT_PKEY_STRICT_FLAGS | CERT_PKEY_EXPLICIT_SIGN |
-                CERT_PKEY_VALID | CERT_PKEY_SIGN;
-            *pvalid = rv;
-            return rv;
-        }
-#endif
     } else {
         if (!x || !pk)
             return 0;
@@ -3992,13 +3744,11 @@ int tls1_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain,
             switch (idx) {
             case SSL_PKEY_RSA_ENC:
             case SSL_PKEY_RSA_SIGN:
-            case SSL_PKEY_DH_RSA:
                 rsign = TLSEXT_signature_rsa;
                 default_nid = NID_sha1WithRSAEncryption;
                 break;
 
             case SSL_PKEY_DSA_SIGN:
-            case SSL_PKEY_DH_DSA:
                 rsign = TLSEXT_signature_dsa;
                 default_nid = NID_dsaWithSHA1;
                 break;
@@ -4091,7 +3841,7 @@ int tls1_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain,
     if (!s->server && strict_mode) {
         STACK_OF(X509_NAME) *ca_dn;
         int check_type = 0;
-        switch (pk->type) {
+        switch (EVP_PKEY_id(pk)) {
         case EVP_PKEY_RSA:
             check_type = TLS_CT_RSA_SIGN;
             break;
@@ -4101,15 +3851,6 @@ int tls1_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain,
         case EVP_PKEY_EC:
             check_type = TLS_CT_ECDSA_SIGN;
             break;
-        case EVP_PKEY_DH:
-        case EVP_PKEY_DHX:
-            {
-                int cert_type = X509_certificate_type(x, pk);
-                if (cert_type & EVP_PKS_RSA)
-                    check_type = TLS_CT_RSA_FIXED_DH;
-                if (cert_type & EVP_PKS_DSA)
-                    check_type = TLS_CT_DSS_FIXED_DH;
-            }
         }
         if (check_type) {
             const unsigned char *ctypes;
@@ -4190,8 +3931,6 @@ void tls1_set_cert_validity(SSL *s)
     tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_RSA_ENC);
     tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_RSA_SIGN);
     tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_DSA_SIGN);
-    tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_DH_RSA);
-    tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_DH_DSA);
     tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_ECC);
     tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_GOST01);
     tls1_check_chain(s, NULL, NULL, NULL, SSL_PKEY_GOST12_256);
@@ -4203,7 +3942,6 @@ int SSL_check_chain(SSL *s, X509 *x, EVP_PKEY *pk, STACK_OF(X509) *chain)
 {
     return tls1_check_chain(s, x, pk, chain, -1);
 }
-
 
 #ifndef OPENSSL_NO_DH
 DH *ssl_get_auto_dh(SSL *s)
@@ -4223,17 +3961,20 @@ DH *ssl_get_auto_dh(SSL *s)
 
     if (dh_secbits >= 128) {
         DH *dhp = DH_new();
+        BIGNUM *p, *g;
         if (dhp == NULL)
             return NULL;
-        dhp->g = BN_new();
-        if (dhp->g != NULL)
-            BN_set_word(dhp->g, 2);
+        g = BN_new();
+        if (g != NULL)
+            BN_set_word(g, 2);
         if (dh_secbits >= 192)
-            dhp->p = get_rfc3526_prime_8192(NULL);
+            p = BN_get_rfc3526_prime_8192(NULL);
         else
-            dhp->p = get_rfc3526_prime_3072(NULL);
-        if (dhp->p == NULL || dhp->g == NULL) {
+            p = BN_get_rfc3526_prime_3072(NULL);
+        if (p == NULL || g == NULL || !DH_set0_pqg(dhp, p, NULL, g)) {
             DH_free(dhp);
+            BN_free(p);
+            BN_free(g);
             return NULL;
         }
         return dhp;
@@ -4246,13 +3987,17 @@ DH *ssl_get_auto_dh(SSL *s)
 
 static int ssl_security_cert_key(SSL *s, SSL_CTX *ctx, X509 *x, int op)
 {
-    int secbits;
-    EVP_PKEY *pkey = X509_get_pubkey(x);
+    int secbits = -1;
+    EVP_PKEY *pkey = X509_get0_pubkey(x);
     if (pkey) {
+        /*
+         * If no parameters this will return -1 and fail using the default
+         * security callback for any non-zero security level. This will
+         * reject keys which omit parameters but this only affects DSA and
+         * omission of parameters is never (?) done in practice.
+         */
         secbits = EVP_PKEY_security_bits(pkey);
-        EVP_PKEY_free(pkey);
-    } else
-        secbits = -1;
+    }
     if (s)
         return ssl_security(s, op, secbits, 0, x);
     else
@@ -4263,6 +4008,9 @@ static int ssl_security_cert_sig(SSL *s, SSL_CTX *ctx, X509 *x, int op)
 {
     /* Lookup signature algorithm digest */
     int secbits = -1, md_nid = NID_undef, sig_nid;
+    /* Don't check signature if self signed */
+    if ((X509_get_extension_flags(x) & EXFLAG_SS) != 0)
+        return 1;
     sig_nid = X509_get_signature_nid(x);
     if (sig_nid && OBJ_find_sigid_algs(sig_nid, &md_nid, NULL)) {
         const EVP_MD *md;

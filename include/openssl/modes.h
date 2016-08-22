@@ -1,8 +1,10 @@
-/* ====================================================================
- * Copyright (c) 2008 The OpenSSL Project. All rights reserved.
+/*
+ * Copyright 2008-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Rights for redistribution and usage in source and binary
- * forms are granted according to the OpenSSL license.
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stddef.h>
@@ -167,10 +169,19 @@ size_t CRYPTO_128_unwrap_pad(void *key, const unsigned char *icv,
 #ifndef OPENSSL_NO_OCB
 typedef struct ocb128_context OCB128_CONTEXT;
 
+typedef void (*ocb128_f) (const unsigned char *in, unsigned char *out,
+                          size_t blocks, const void *key,
+                          size_t start_block_num,
+                          unsigned char offset_i[16],
+                          const unsigned char L_[][16],
+                          unsigned char checksum[16]);
+
 OCB128_CONTEXT *CRYPTO_ocb128_new(void *keyenc, void *keydec,
-                                  block128_f encrypt, block128_f decrypt);
+                                  block128_f encrypt, block128_f decrypt,
+                                  ocb128_f stream);
 int CRYPTO_ocb128_init(OCB128_CONTEXT *ctx, void *keyenc, void *keydec,
-                       block128_f encrypt, block128_f decrypt);
+                       block128_f encrypt, block128_f decrypt,
+                       ocb128_f stream);
 int CRYPTO_ocb128_copy_ctx(OCB128_CONTEXT *dest, OCB128_CONTEXT *src,
                            void *keyenc, void *keydec);
 int CRYPTO_ocb128_setiv(OCB128_CONTEXT *ctx, const unsigned char *iv,

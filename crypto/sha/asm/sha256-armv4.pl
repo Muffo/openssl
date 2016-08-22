@@ -1,4 +1,11 @@
-#!/usr/bin/env perl
+#! /usr/bin/env perl
+# Copyright 2007-2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 
 # ====================================================================
 # Written by Andy Polyakov <appro@openssl.org> for the OpenSSL
@@ -38,8 +45,8 @@
 # Add ARMv8 code path performing at 2.0 cpb on Apple A7.
 
 $flavour = shift;
-if ($flavour=~/^\w[\w\-]*\.\w+$/) { $output=$flavour; undef $flavour; }
-else { while (($output=shift) && ($output!~/^\w[\w\-]*\.\w+$/)) {} }
+if ($flavour=~/\w[\w\-]*\.\w+$/) { $output=$flavour; undef $flavour; }
+else { while (($output=shift) && ($output!~/\w[\w\-]*\.\w+$/)) {} }
 
 if ($flavour && $flavour ne "void") {
     $0 =~ m/(.*[\/\\])[^\/\\]+$/; $dir=$1;
@@ -175,10 +182,9 @@ $code=<<___;
 #endif
 
 .text
-#if defined(__thumb2__) && !defined(__APPLE__)
+#if defined(__thumb2__)
 .syntax unified
 .thumb
-# define adrl adr
 #else
 .code   32
 #endif
@@ -469,7 +475,8 @@ $code.=<<___;
 
 .global	sha256_block_data_order_neon
 .type	sha256_block_data_order_neon,%function
-.align	4
+.align	5
+.skip	16
 sha256_block_data_order_neon:
 .LNEON:
 	stmdb	sp!,{r4-r12,lr}
@@ -595,7 +602,7 @@ my $Ktbl="r3";
 $code.=<<___;
 #if __ARM_MAX_ARCH__>=7 && !defined(__KERNEL__)
 
-# if defined(__thumb2__) && !defined(__APPLE__)
+# if defined(__thumb2__)
 #  define INST(a,b,c,d)	.byte	c,d|0xc,a,b
 # else
 #  define INST(a,b,c,d)	.byte	a,b,c,d
@@ -606,16 +613,11 @@ $code.=<<___;
 sha256_block_data_order_armv8:
 .LARMv8:
 	vld1.32	{$ABCD,$EFGH},[$ctx]
-# ifdef	__APPLE__
 	sub	$Ktbl,$Ktbl,#256+32
-# elif	defined(__thumb2__)
-	adr	$Ktbl,.LARMv8
-	sub	$Ktbl,$Ktbl,#.LARMv8-K256
-# else
-	adrl	$Ktbl,K256
-# endif
 	add	$len,$inp,$len,lsl#6	@ len to point at the end of inp
+	b	.Loop_v8
 
+.align	4
 .Loop_v8:
 	vld1.8		{@MSG[0]-@MSG[1]},[$inp]!
 	vld1.8		{@MSG[2]-@MSG[3]},[$inp]!

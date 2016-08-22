@@ -1,4 +1,11 @@
-#!/usr/bin/env perl
+#! /usr/bin/env perl
+# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 
 # ====================================================================
 # Written by Andy Polyakov <appro@openssl.org> for the OpenSSL
@@ -26,7 +33,7 @@
 # operation. Keep in mind that +400% means 5x improvement.
 
 $flavour = shift;
-while (($output=shift) && ($output!~/^\w[\w\-]*\.\w+$/)) {}
+while (($output=shift) && ($output!~/\w[\w\-]*\.\w+$/)) {}
 
 $0 =~ m/(.*[\/\\])[^\/\\]+$/; $dir=$1;
 ( $xlate="${dir}arm-xlate.pl" and -f $xlate ) or
@@ -674,7 +681,7 @@ __ecp_nistz256_div_by_2:
 .size	__ecp_nistz256_div_by_2,.-__ecp_nistz256_div_by_2
 ___
 ########################################################################
-# following subroutines are "literal" implemetation of those found in
+# following subroutines are "literal" implementation of those found in
 # ecp_nistz256.c
 #
 ########################################################################
@@ -691,12 +698,13 @@ $code.=<<___;
 .type	ecp_nistz256_point_double,%function
 .align	5
 ecp_nistz256_point_double:
-	stp	x29,x30,[sp,#-48]!
+	stp	x29,x30,[sp,#-80]!
 	add	x29,sp,#0
 	stp	x19,x20,[sp,#16]
 	stp	x21,x22,[sp,#32]
 	sub	sp,sp,#32*4
 
+.Ldouble_shortcut:
 	ldp	$acc0,$acc1,[$ap,#32]
 	 mov	$rp_real,$rp
 	ldp	$acc2,$acc3,[$ap,#48]
@@ -823,7 +831,7 @@ ecp_nistz256_point_double:
 	add	sp,x29,#0		// destroy frame
 	ldp	x19,x20,[x29,#16]
 	ldp	x21,x22,[x29,#32]
-	ldp	x29,x30,[sp],#48
+	ldp	x29,x30,[sp],#80
 	ret
 .size	ecp_nistz256_point_double,.-ecp_nistz256_point_double
 ___
@@ -963,7 +971,7 @@ ecp_nistz256_point_add:
 	b.eq	.Ladd_proceed		// (in1infty || in2infty)?
 
 	tst	$temp,$temp
-	b.eq	.Ladd_proceed		// is_equal(S1,S2)?
+	b.eq	.Ladd_double		// is_equal(S1,S2)?
 
 	eor	$a0,$a0,$a0
 	eor	$a1,$a1,$a1
@@ -974,6 +982,15 @@ ecp_nistz256_point_add:
 	stp	$a0,$a1,[$rp_real,#64]
 	stp	$a0,$a1,[$rp_real,#80]
 	b	.Ladd_done
+
+.align	4
+.Ladd_double:
+	mov	$ap,$ap_real
+	mov	$rp,$rp_real
+	ldp	x23,x24,[x29,#48]
+	ldp	x25,x26,[x29,#64]
+	add	sp,sp,#32*(12-4)	// difference in stack frames
+	b	.Ldouble_shortcut
 
 .align	4
 .Ladd_proceed:
@@ -1288,6 +1305,9 @@ $code.=<<___;
 	ldp	$t2,$t3,[$bp_real,#$i+48]
 	stp	$acc0,$acc1,[$rp_real,#$i]
 	stp	$acc2,$acc3,[$rp_real,#$i+16]
+___
+$code.=<<___	if ($i == 0);
+	adr	$bp_real,.Lone_mont-64
 ___
 }
 $code.=<<___;

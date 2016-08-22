@@ -1,60 +1,10 @@
-/* crypto/ui/ui_lib.c -*- mode:C; c-file-style: "eay" -*- */
 /*
- * Written by Richard Levitte (richard@levitte.org) for the OpenSSL project
- * 2001.
- */
-/* ====================================================================
- * Copyright (c) 2001 The OpenSSL Project.  All rights reserved.
+ * Copyright 2001-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <string.h>
@@ -80,12 +30,23 @@ UI *UI_new_method(const UI_METHOD *method)
         UIerr(UI_F_UI_NEW_METHOD, ERR_R_MALLOC_FAILURE);
         return NULL;
     }
+
+    ret->lock = CRYPTO_THREAD_lock_new();
+    if (ret->lock == NULL) {
+        UIerr(UI_F_UI_NEW_METHOD, ERR_R_MALLOC_FAILURE);
+        OPENSSL_free(ret);
+        return NULL;
+    }
+
     if (method == NULL)
         ret->meth = UI_get_default_method();
     else
         ret->meth = method;
 
-    CRYPTO_new_ex_data(CRYPTO_EX_INDEX_UI, ret, &ret->ex_data);
+    if (!CRYPTO_new_ex_data(CRYPTO_EX_INDEX_UI, ret, &ret->ex_data)) {
+        OPENSSL_free(ret);
+        return NULL;
+    }
     return ret;
 }
 
@@ -112,6 +73,7 @@ void UI_free(UI *ui)
         return;
     sk_UI_STRING_pop_free(ui->strings, free_string);
     CRYPTO_free_ex_data(CRYPTO_EX_INDEX_UI, ui, &ui->ex_data);
+    CRYPTO_THREAD_lock_free(ui->lock);
     OPENSSL_free(ui);
 }
 
@@ -164,9 +126,11 @@ static int general_allocate_string(UI *ui, const char *prompt,
             s->_.string_data.result_maxsize = maxsize;
             s->_.string_data.test_buf = test_buf;
             ret = sk_UI_STRING_push(ui->strings, s);
-            /* sk_push() returns 0 on error.  Let's addapt that */
-            if (ret <= 0)
+            /* sk_push() returns 0 on error.  Let's adapt that */
+            if (ret <= 0) {
                 ret--;
+                free_string(s);
+            }
         } else
             free_string(s);
     }
@@ -208,10 +172,12 @@ static int general_allocate_boolean(UI *ui,
                 s->_.boolean_data.cancel_chars = cancel_chars;
                 ret = sk_UI_STRING_push(ui->strings, s);
                 /*
-                 * sk_push() returns 0 on error. Let's addapt that
+                 * sk_push() returns 0 on error. Let's adapt that
                  */
-                if (ret <= 0)
+                if (ret <= 0) {
                     ret--;
+                    free_string(s);
+                }
             } else
                 free_string(s);
         }
@@ -238,7 +204,7 @@ int UI_dup_input_string(UI *ui, const char *prompt, int flags,
     char *prompt_copy = NULL;
 
     if (prompt) {
-        prompt_copy = BUF_strdup(prompt);
+        prompt_copy = OPENSSL_strdup(prompt);
         if (prompt_copy == NULL) {
             UIerr(UI_F_UI_DUP_INPUT_STRING, ERR_R_MALLOC_FAILURE);
             return 0;
@@ -266,7 +232,7 @@ int UI_dup_verify_string(UI *ui, const char *prompt, int flags,
     char *prompt_copy = NULL;
 
     if (prompt) {
-        prompt_copy = BUF_strdup(prompt);
+        prompt_copy = OPENSSL_strdup(prompt);
         if (prompt_copy == NULL) {
             UIerr(UI_F_UI_DUP_VERIFY_STRING, ERR_R_MALLOC_FAILURE);
             return -1;
@@ -297,7 +263,7 @@ int UI_dup_input_boolean(UI *ui, const char *prompt, const char *action_desc,
     char *cancel_chars_copy = NULL;
 
     if (prompt) {
-        prompt_copy = BUF_strdup(prompt);
+        prompt_copy = OPENSSL_strdup(prompt);
         if (prompt_copy == NULL) {
             UIerr(UI_F_UI_DUP_INPUT_BOOLEAN, ERR_R_MALLOC_FAILURE);
             goto err;
@@ -305,7 +271,7 @@ int UI_dup_input_boolean(UI *ui, const char *prompt, const char *action_desc,
     }
 
     if (action_desc) {
-        action_desc_copy = BUF_strdup(action_desc);
+        action_desc_copy = OPENSSL_strdup(action_desc);
         if (action_desc_copy == NULL) {
             UIerr(UI_F_UI_DUP_INPUT_BOOLEAN, ERR_R_MALLOC_FAILURE);
             goto err;
@@ -313,7 +279,7 @@ int UI_dup_input_boolean(UI *ui, const char *prompt, const char *action_desc,
     }
 
     if (ok_chars) {
-        ok_chars_copy = BUF_strdup(ok_chars);
+        ok_chars_copy = OPENSSL_strdup(ok_chars);
         if (ok_chars_copy == NULL) {
             UIerr(UI_F_UI_DUP_INPUT_BOOLEAN, ERR_R_MALLOC_FAILURE);
             goto err;
@@ -321,7 +287,7 @@ int UI_dup_input_boolean(UI *ui, const char *prompt, const char *action_desc,
     }
 
     if (cancel_chars) {
-        cancel_chars_copy = BUF_strdup(cancel_chars);
+        cancel_chars_copy = OPENSSL_strdup(cancel_chars);
         if (cancel_chars_copy == NULL) {
             UIerr(UI_F_UI_DUP_INPUT_BOOLEAN, ERR_R_MALLOC_FAILURE);
             goto err;
@@ -350,7 +316,7 @@ int UI_dup_info_string(UI *ui, const char *text)
     char *text_copy = NULL;
 
     if (text) {
-        text_copy = BUF_strdup(text);
+        text_copy = OPENSSL_strdup(text);
         if (text_copy == NULL) {
             UIerr(UI_F_UI_DUP_INFO_STRING, ERR_R_MALLOC_FAILURE);
             return -1;
@@ -372,7 +338,7 @@ int UI_dup_error_string(UI *ui, const char *text)
     char *text_copy = NULL;
 
     if (text) {
-        text_copy = BUF_strdup(text);
+        text_copy = OPENSSL_strdup(text);
         if (text_copy == NULL) {
             UIerr(UI_F_UI_DUP_ERROR_STRING, ERR_R_MALLOC_FAILURE);
             return -1;
@@ -405,13 +371,13 @@ char *UI_construct_prompt(UI *ui, const char *object_desc,
         prompt = OPENSSL_malloc(len + 1);
         if (prompt == NULL)
             return NULL;
-        BUF_strlcpy(prompt, prompt1, len + 1);
-        BUF_strlcat(prompt, object_desc, len + 1);
+        OPENSSL_strlcpy(prompt, prompt1, len + 1);
+        OPENSSL_strlcat(prompt, object_desc, len + 1);
         if (object_name) {
-            BUF_strlcat(prompt, prompt2, len + 1);
-            BUF_strlcat(prompt, object_name, len + 1);
+            OPENSSL_strlcat(prompt, prompt2, len + 1);
+            OPENSSL_strlcat(prompt, object_name, len + 1);
         }
-        BUF_strlcat(prompt, prompt3, len + 1);
+        OPENSSL_strlcat(prompt, prompt3, len + 1);
     }
     return prompt;
 }
@@ -570,12 +536,18 @@ const UI_METHOD *UI_set_method(UI *ui, const UI_METHOD *meth)
     return ui->meth;
 }
 
-UI_METHOD *UI_create_method(char *name)
+UI_METHOD *UI_create_method(const char *name)
 {
     UI_METHOD *ui_method = OPENSSL_zalloc(sizeof(*ui_method));
 
-    if (ui_method != NULL)
-        ui_method->name = BUF_strdup(name);
+    if (ui_method != NULL) {
+        ui_method->name = OPENSSL_strdup(name);
+        if (ui_method->name == NULL) {
+            OPENSSL_free(ui_method);
+            UIerr(UI_F_UI_CREATE_METHOD, ERR_R_MALLOC_FAILURE);
+            return NULL;
+        }
+    }
     return ui_method;
 }
 
@@ -822,7 +794,7 @@ int UI_set_result(UI *ui, UI_STRING *uis, const char *result)
             return -1;
         }
 
-        BUF_strlcpy(uis->result_buf, result,
+        OPENSSL_strlcpy(uis->result_buf, result,
                     uis->_.string_data.result_maxsize + 1);
         break;
     case UIT_BOOLEAN:

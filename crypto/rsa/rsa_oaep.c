@@ -1,7 +1,10 @@
-/* crypto/rsa/rsa_oaep.c */
 /*
- * Written by Ulf Moeller. This software is distributed on an "AS IS" basis,
- * WITHOUT WARRANTY OF ANY KIND, either express or implied.
+ * Copyright 1999-2016 The OpenSSL Project Authors. All Rights Reserved.
+ *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 /* EME-OAEP as defined in RFC 2437 (PKCS #1 v2.0) */
@@ -22,10 +25,10 @@
 #include <stdio.h>
 #include "internal/cryptlib.h"
 #include <openssl/bn.h>
-#include <openssl/rsa.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include "rsa_locl.h"
 
 int RSA_padding_add_PKCS1_OAEP(unsigned char *to, int tlen,
                                const unsigned char *from, int flen,
@@ -242,13 +245,14 @@ int PKCS1_MGF1(unsigned char *mask, long len,
 {
     long i, outlen = 0;
     unsigned char cnt[4];
-    EVP_MD_CTX c;
+    EVP_MD_CTX *c = EVP_MD_CTX_new();
     unsigned char md[EVP_MAX_MD_SIZE];
     int mdlen;
     int rv = -1;
 
-    EVP_MD_CTX_init(&c);
-    mdlen = M_EVP_MD_size(dgst);
+    if (c == NULL)
+        goto err;
+    mdlen = EVP_MD_size(dgst);
     if (mdlen < 0)
         goto err;
     for (i = 0; outlen < len; i++) {
@@ -256,16 +260,16 @@ int PKCS1_MGF1(unsigned char *mask, long len,
         cnt[1] = (unsigned char)((i >> 16) & 255);
         cnt[2] = (unsigned char)((i >> 8)) & 255;
         cnt[3] = (unsigned char)(i & 255);
-        if (!EVP_DigestInit_ex(&c, dgst, NULL)
-            || !EVP_DigestUpdate(&c, seed, seedlen)
-            || !EVP_DigestUpdate(&c, cnt, 4))
+        if (!EVP_DigestInit_ex(c, dgst, NULL)
+            || !EVP_DigestUpdate(c, seed, seedlen)
+            || !EVP_DigestUpdate(c, cnt, 4))
             goto err;
         if (outlen + mdlen <= len) {
-            if (!EVP_DigestFinal_ex(&c, mask + outlen, NULL))
+            if (!EVP_DigestFinal_ex(c, mask + outlen, NULL))
                 goto err;
             outlen += mdlen;
         } else {
-            if (!EVP_DigestFinal_ex(&c, md, NULL))
+            if (!EVP_DigestFinal_ex(c, md, NULL))
                 goto err;
             memcpy(mask + outlen, md, len - outlen);
             outlen = len;
@@ -273,6 +277,6 @@ int PKCS1_MGF1(unsigned char *mask, long len,
     }
     rv = 0;
  err:
-    EVP_MD_CTX_cleanup(&c);
+    EVP_MD_CTX_free(c);
     return rv;
 }

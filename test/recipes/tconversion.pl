@@ -1,4 +1,11 @@
-#! /usr/bin/perl
+#! /usr/bin/env perl
+# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 
 use strict;
 use warnings;
@@ -6,7 +13,7 @@ use warnings;
 use File::Compare qw/compare_text/;
 use File::Copy;
 use lib 'testlib';
-use OpenSSL::Test qw/:DEFAULT top_file/;
+use OpenSSL::Test qw/:DEFAULT/;
 
 my %conversionforms = (
     # Default conversion forms.  Other series may be added with
@@ -53,8 +60,9 @@ sub tconversion {
 	  ok(run(app([@cmd,
 		      "-in", "$testtype-fff.p",
 		      "-inform", "p",
-		      "-outform", $to],
-		     stdout => "$testtype-f.$to")), "p -> $to");
+		      "-out", "$testtype-f.$to",
+		      "-outform", $to])),
+	     "p -> $to");
       }
 
       foreach my $to (@conversionforms) {
@@ -62,8 +70,9 @@ sub tconversion {
 	      ok(run(app([@cmd,
 			  "-in", "$testtype-f.$from",
 			  "-inform", $from,
-			  "-outform", $to],
-			 stdout => "$testtype-ff.$from$to")), "$from -> $to");
+			  "-out", "$testtype-ff.$from$to",
+			  "-outform", $to])),
+		 "$from -> $to");
 	  }
       }
 

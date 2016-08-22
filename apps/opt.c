@@ -1,50 +1,10 @@
-/* ====================================================================
- * Copyright (c) 2015 The OpenSSL Project.  All rights reserved.
+/*
+ * Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.OpenSSL.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    licensing@OpenSSL.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.OpenSSL.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 /* #define COMPILE_STANDALONE_TEST_DRIVER  */
@@ -57,7 +17,9 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <ctype.h>
+#include <limits.h>
 #include <openssl/bio.h>
+#include <openssl/x509v3.h>
 
 #define MAX_OPT_HELP_WIDTH 30
 const char OPT_HELP_STR[] = "--";
@@ -77,7 +39,7 @@ static char prog[40];
 /*
  * Return the simple name of the program; removing various platform gunk.
  */
-#if defined(OPENSSL_SYS_WIN32) || defined(OPENSSL_SYS_NETWARE)
+#if defined(OPENSSL_SYS_WIN32)
 char *opt_progname(const char *argv0)
 {
     size_t i, n;
@@ -96,11 +58,6 @@ char *opt_progname(const char *argv0)
     if (n > 4 &&
         (strcmp(&p[n - 4], ".exe") == 0 || strcmp(&p[n - 4], ".EXE") == 0))
         n -= 4;
-#if defined(OPENSSL_SYS_NETWARE)
-    if (n > 4 &&
-        (strcmp(&p[n - 4], ".nlm") == 0 || strcmp(&p[n - 4], ".NLM") == 0))
-        n -= 4;
-#endif
 
     /* Copy over the name, in lowercase. */
     if (n > sizeof prog - 1)
@@ -117,7 +74,7 @@ char *opt_progname(const char *argv0)
 {
     const char *p, *q;
 
-    /* Find last special charcter sys:[foo.bar]openssl */
+    /* Find last special character sys:[foo.bar]openssl */
     for (p = argv0 + strlen(argv0); --p > argv0;)
         if (*p == ':' || *p == ']' || *p == '>') {
             p++;
@@ -127,7 +84,7 @@ char *opt_progname(const char *argv0)
     q = strrchr(p, '.');
     strncpy(prog, p, sizeof prog - 1);
     prog[sizeof prog - 1] = '\0';
-    if (q == NULL || q - p >= sizeof prog)
+    if (q != NULL && q - p < sizeof prog)
         prog[q - p] = '\0';
     return prog;
 }
@@ -167,8 +124,8 @@ char *opt_init(int ac, char **av, const OPTIONS *o)
     unknown = NULL;
 
     for (; o->name; ++o) {
-        const OPTIONS *next;
 #ifndef NDEBUG
+        const OPTIONS *next;
         int duplicated, i;
 #endif
 
@@ -180,10 +137,14 @@ char *opt_init(int ac, char **av, const OPTIONS *o)
         /* Make sure options are legit. */
         assert(o->name[0] != '-');
         assert(o->retval > 0);
-        assert(i == 0 || i == '-'
-               || i == 'n' || i == 'p' || i == 'u'
-               || i == 's' || i == '<' || i == '>' || i == '/'
-               || i == 'f' || i == 'F');
+        switch (i) {
+        case   0: case '-': case '/': case '<': case '>': case 'E': case 'F':
+        case 'M': case 'U': case 'f': case 'l': case 'n': case 'p': case 's':
+        case 'u': case 'c':
+            break;
+        default:
+            assert(0);
+        }
 
         /* Make sure there are no duplicates. */
         for (next = o + 1; next->name; ++next) {
@@ -350,30 +311,16 @@ int opt_pair(const char *name, const OPT_PAIR* pairs, int *result)
     return 0;
 }
 
-/* See if cp looks like a hex number, in case user left off the 0x */
-static int scanforhex(const char *cp)
-{
-    if (*cp == '0' && (cp[1] == 'x' || cp[1] == 'X'))
-        return 16;
-    for (; *cp; cp++)
-        /* Look for a hex digit that isn't a regular digit. */
-        if (isxdigit(*cp) && !isdigit(*cp))
-            return 16;
-    return 0;
-}
-
 /* Parse an int, put it into *result; return 0 on failure, else 1. */
 int opt_int(const char *value, int *result)
 {
-    const char *fmt = "%d";
-    int base = scanforhex(value);
+    long l;
 
-    if (base == 16)
-        fmt = "%x";
-    else if (*value == '0')
-        fmt = "%o";
-    if (sscanf(value, fmt, result) != 1) {
-        BIO_printf(bio_err, "%s: Can't parse \"%s\" as a number\n",
+    if (!opt_long(value, &l))
+        return 0;
+    *result = (int)l;
+    if (*result != l) {
+        BIO_printf(bio_err, "%s: Value \"%s\" outside integer range\n",
                    prog, value);
         return 0;
     }
@@ -383,32 +330,98 @@ int opt_int(const char *value, int *result)
 /* Parse a long, put it into *result; return 0 on failure, else 1. */
 int opt_long(const char *value, long *result)
 {
-    char *endptr;
-    int base = scanforhex(value);
+    int oerrno = errno;
+    long l;
+    char *endp;
 
-    *result = strtol(value, &endptr, base);
-    if (*endptr) {
-        BIO_printf(bio_err,
-                   "%s: Bad char %c in number %s\n", prog, *endptr, value);
+    errno = 0;
+    l = strtol(value, &endp, 0);
+    if (*endp
+            || endp == value
+            || ((l == LONG_MAX || l == LONG_MIN) && errno == ERANGE)
+            || (l == 0 && errno != 0)) {
+        BIO_printf(bio_err, "%s: Can't parse \"%s\" as a number\n",
+                   prog, value);
+        errno = oerrno;
         return 0;
     }
+    *result = l;
+    errno = oerrno;
     return 1;
 }
+
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L && \
+    defined(INTMAX_MAX) && defined(UINTMAX_MAX)
+
+/* Parse an intmax_t, put it into *result; return 0 on failure, else 1. */
+int opt_imax(const char *value, intmax_t *result)
+{
+    int oerrno = errno;
+    intmax_t m;
+    char *endp;
+
+    errno = 0;
+    m = strtoimax(value, &endp, 0);
+    if (*endp
+            || endp == value
+            || ((m == INTMAX_MAX || m == INTMAX_MIN) && errno == ERANGE)
+            || (m == 0 && errno != 0)) {
+        BIO_printf(bio_err, "%s: Can't parse \"%s\" as a number\n",
+                   prog, value);
+        errno = oerrno;
+        return 0;
+    }
+    *result = m;
+    errno = oerrno;
+    return 1;
+}
+
+/* Parse a uintmax_t, put it into *result; return 0 on failure, else 1. */
+int opt_umax(const char *value, uintmax_t *result)
+{
+    int oerrno = errno;
+    uintmax_t m;
+    char *endp;
+
+    errno = 0;
+    m = strtoumax(value, &endp, 0);
+    if (*endp
+            || endp == value
+            || (m == UINTMAX_MAX && errno == ERANGE)
+            || (m == 0 && errno != 0)) {
+        BIO_printf(bio_err, "%s: Can't parse \"%s\" as a number\n",
+                   prog, value);
+        errno = oerrno;
+        return 0;
+    }
+    *result = m;
+    errno = oerrno;
+    return 1;
+}
+#endif
 
 /*
  * Parse an unsigned long, put it into *result; return 0 on failure, else 1.
  */
 int opt_ulong(const char *value, unsigned long *result)
 {
+    int oerrno = errno;
     char *endptr;
-    int base = scanforhex(value);
+    unsigned long l;
 
-    *result = strtoul(value, &endptr, base);
-    if (*endptr) {
-        BIO_printf(bio_err,
-                   "%s: Bad char %c in number %s\n", prog, *endptr, value);
+    errno = 0;
+    l = strtoul(value, &endptr, 0);
+    if (*endptr
+            || endptr == value
+            || ((l == ULONG_MAX) && errno == ERANGE)
+            || (l == 0 && errno != 0)) {
+        BIO_printf(bio_err, "%s: Can't parse \"%s\" as an unsigned number\n",
+                   prog, value);
+        errno = oerrno;
         return 0;
     }
+    *result = l;
+    errno = oerrno;
     return 1;
 }
 
@@ -421,8 +434,8 @@ enum range { OPT_V_ENUM };
 
 int opt_verify(int opt, X509_VERIFY_PARAM *vpm)
 {
-    unsigned long ul;
     int i;
+    ossl_intmax_t t = 0;
     ASN1_OBJECT *otmp;
     X509_PURPOSE *xptmp;
     const X509_VERIFY_PARAM *vtmp;
@@ -444,14 +457,25 @@ int opt_verify(int opt, X509_VERIFY_PARAM *vpm)
         X509_VERIFY_PARAM_add0_policy(vpm, otmp);
         break;
     case OPT_V_PURPOSE:
+        /* purpose name -> purpose index */
         i = X509_PURPOSE_get_by_sname(opt_arg());
         if (i < 0) {
             BIO_printf(bio_err, "%s: Invalid purpose %s\n", prog, opt_arg());
             return 0;
         }
+
+        /* purpose index -> purpose object */
         xptmp = X509_PURPOSE_get0(i);
+
+        /* purpose object -> purpose value */
         i = X509_PURPOSE_get_id(xptmp);
-        X509_VERIFY_PARAM_set_purpose(vpm, i);
+
+        if (!X509_VERIFY_PARAM_set_purpose(vpm, i)) {
+            BIO_printf(bio_err,
+                       "%s: Internal error setting purpose %s\n",
+                       prog, opt_arg());
+            return 0;
+        }
         break;
     case OPT_V_VERIFY_NAME:
         vtmp = X509_VERIFY_PARAM_lookup(opt_arg());
@@ -467,10 +491,20 @@ int opt_verify(int opt, X509_VERIFY_PARAM *vpm)
         if (i >= 0)
             X509_VERIFY_PARAM_set_depth(vpm, i);
         break;
+    case OPT_V_VERIFY_AUTH_LEVEL:
+        i = atoi(opt_arg());
+        if (i >= 0)
+            X509_VERIFY_PARAM_set_auth_level(vpm, i);
+        break;
     case OPT_V_ATTIME:
-        opt_ulong(opt_arg(), &ul);
-        if (ul)
-            X509_VERIFY_PARAM_set_time(vpm, (time_t)ul);
+        if (!opt_imax(opt_arg(), &t))
+            return 0;
+        if (t != (time_t)t) {
+            BIO_printf(bio_err, "%s: epoch time out of range %s\n",
+                       prog, opt_arg());
+            return 0;
+        }
+        X509_VERIFY_PARAM_set_time(vpm, (time_t)t);
         break;
     case OPT_V_VERIFY_HOSTNAME:
         if (!X509_VERIFY_PARAM_set1_host(vpm, opt_arg(), 0))
@@ -488,7 +522,7 @@ int opt_verify(int opt, X509_VERIFY_PARAM *vpm)
         X509_VERIFY_PARAM_set_flags(vpm, X509_V_FLAG_IGNORE_CRITICAL);
         break;
     case OPT_V_ISSUER_CHECKS:
-        X509_VERIFY_PARAM_set_flags(vpm, X509_V_FLAG_CB_ISSUER_CHECK);
+        /* NOP, deprecated */
         break;
     case OPT_V_CRL_CHECK:
         X509_VERIFY_PARAM_set_flags(vpm, X509_V_FLAG_CRL_CHECK);
@@ -542,10 +576,13 @@ int opt_verify(int opt, X509_VERIFY_PARAM *vpm)
         break;
     case OPT_V_NO_ALT_CHAINS:
         X509_VERIFY_PARAM_set_flags(vpm, X509_V_FLAG_NO_ALT_CHAINS);
-	break;
+        break;
     case OPT_V_NO_CHECK_TIME:
         X509_VERIFY_PARAM_set_flags(vpm, X509_V_FLAG_NO_CHECK_TIME);
-	break;
+        break;
+    case OPT_V_ALLOW_PROXY_CERTS:
+        X509_VERIFY_PARAM_set_flags(vpm, X509_V_FLAG_ALLOW_PROXY_CERTS);
+        break;
     }
     return 1;
 
@@ -558,11 +595,12 @@ int opt_verify(int opt, X509_VERIFY_PARAM *vpm)
 int opt_next(void)
 {
     char *p;
-    char *endptr;
     const OPTIONS *o;
-    int dummy;
-    int base;
-    long val;
+    int ival;
+    long lval;
+    unsigned long ulval;
+    ossl_intmax_t imval;
+    ossl_uintmax_t umval;
 
     /* Look at current arg; at end of the list? */
     arg = NULL;
@@ -613,10 +651,6 @@ int opt_next(void)
         }
 
         /* Syntax-check value. */
-        /*
-         * Do some basic syntax-checking on the value.  These tests aren't
-         * perfect (ignore range overflow) but they catch common failures.
-         */
         switch (o->valtype) {
         default:
         case 's':
@@ -645,35 +679,55 @@ int opt_next(void)
             return -1;
         case 'p':
         case 'n':
-            base = scanforhex(arg);
-            val = strtol(arg, &endptr, base);
-            if (*endptr == '\0') {
-                if (o->valtype == 'p' && val <= 0) {
-                    BIO_printf(bio_err,
-                               "%s: Non-positive number \"%s\" for -%s\n",
-                               prog, arg, o->name);
-                    return -1;
-                }
-                break;
+            if (!opt_int(arg, &ival)
+                    || (o->valtype == 'p' && ival <= 0)) {
+                BIO_printf(bio_err,
+                           "%s: Non-positive number \"%s\" for -%s\n",
+                           prog, arg, o->name);
+                return -1;
             }
-            BIO_printf(bio_err,
-                       "%s: Invalid number \"%s\" for -%s\n",
-                       prog, arg, o->name);
-            return -1;
+            break;
+        case 'M':
+            if (!opt_imax(arg, &imval)) {
+                BIO_printf(bio_err,
+                           "%s: Invalid number \"%s\" for -%s\n",
+                           prog, arg, o->name);
+                return -1;
+            }
+            break;
+        case 'U':
+            if (!opt_umax(arg, &umval)) {
+                BIO_printf(bio_err,
+                           "%s: Invalid number \"%s\" for -%s\n",
+                           prog, arg, o->name);
+                return -1;
+            }
+            break;
+        case 'l':
+            if (!opt_long(arg, &lval)) {
+                BIO_printf(bio_err,
+                           "%s: Invalid number \"%s\" for -%s\n",
+                           prog, arg, o->name);
+                return -1;
+            }
+            break;
         case 'u':
-            base = scanforhex(arg);
-            strtoul(arg, &endptr, base);
-            if (*endptr == '\0')
-                break;
-            BIO_printf(bio_err,
-                       "%s: Invalid number \"%s\" for -%s\n",
-                       prog, arg, o->name);
-            return -1;
-        case 'f':
+            if (!opt_ulong(arg, &ulval)) {
+                BIO_printf(bio_err,
+                           "%s: Invalid number \"%s\" for -%s\n",
+                           prog, arg, o->name);
+                return -1;
+            }
+            break;
+        case 'c':
+        case 'E':
         case 'F':
+        case 'f':
             if (opt_format(arg,
+                           o->valtype == 'c' ? OPT_FMT_PDS :
+                           o->valtype == 'E' ? OPT_FMT_PDE :
                            o->valtype == 'F' ? OPT_FMT_PEMDER
-                           : OPT_FMT_ANY, &dummy))
+                           : OPT_FMT_ANY, &ival))
                 break;
             BIO_printf(bio_err,
                        "%s: Invalid format \"%s\" for -%s\n",
@@ -731,6 +785,7 @@ int opt_num_rest(void)
 static const char *valtype2param(const OPTIONS *o)
 {
     switch (o->valtype) {
+    case 0:
     case '-':
         return "";
     case 's':
@@ -742,15 +797,23 @@ static const char *valtype2param(const OPTIONS *o)
     case '>':
         return "outfile";
     case 'p':
-        return "pnum";
+        return "+int";
     case 'n':
-        return "num";
+        return "int";
+    case 'l':
+        return "long";
     case 'u':
-        return "unum";
+        return "ulong";
+    case 'E':
+        return "PEM|DER|ENGINE";
     case 'F':
-        return "der/pem";
+        return "PEM|DER";
     case 'f':
         return "format";
+    case 'M':
+        return "intmax";
+    case 'U':
+        return "uintmax";
     }
     return "parm";
 }
@@ -797,7 +860,7 @@ void opt_help(const OPTIONS *list)
         start[sizeof start - 1] = '\0';
 
         if (o->name == OPT_MORE_STR) {
-            /* Continuation of previous line; padd and print. */
+            /* Continuation of previous line; pad and print. */
             start[width] = '\0';
             BIO_printf(bio_err, "%s  %s\n", start, help);
             continue;

@@ -1,59 +1,10 @@
-/* crypto/hmac/hmactest.c */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
@@ -63,6 +14,7 @@
 #include "../e_os.h"
 
 # include <openssl/hmac.h>
+# include <openssl/sha.h>
 # ifndef OPENSSL_NO_MD5
 #  include <openssl/md5.h>
 # endif
@@ -119,8 +71,8 @@ static struct test_st {
         (unsigned char *)"bab53058ae861a7f191abe2d0145cbb123776a6369ee3f9d79ce455667e411dd"
     },
     {
-        "12345", 5, "My test data again", 12,
-        (unsigned char *)"7dbe8c764c068e3bcd6e6b0fbcd5e6fc197b15bb"
+        "12345", 5, "My test data again", 18,
+        (unsigned char *)"a12396ceddd2a85f4c656bc1e0aa50c78cffde3e"
     }
 };
 # endif
@@ -134,7 +86,7 @@ int main(int argc, char *argv[])
     char *p;
 # endif
     int err = 0;
-    HMAC_CTX ctx, ctx2;
+    HMAC_CTX *ctx = NULL, *ctx2 = NULL;
     unsigned char buf[EVP_MAX_MD_SIZE];
     unsigned int len;
 
@@ -165,57 +117,80 @@ int main(int argc, char *argv[])
 # endif                         /* OPENSSL_NO_MD5 */
 
 /* test4 */
-    HMAC_CTX_init(&ctx);
-    if (HMAC_Init_ex(&ctx, NULL, 0, NULL, NULL)) {
+    ctx = HMAC_CTX_new();
+    if (ctx == NULL) {
+        printf("HMAC malloc failure (test 4)\n");
+        err++;
+        goto end;
+    }
+    if (HMAC_CTX_get_md(ctx) != NULL) {
+        printf("Message digest not NULL for HMAC (test 4)\n");
+        err++;
+        goto test5;
+    }
+    if (HMAC_Init_ex(ctx, NULL, 0, NULL, NULL)) {
         printf("Should fail to initialise HMAC with empty MD and key (test 4)\n");
         err++;
         goto test5;
     }
-    if (HMAC_Update(&ctx, test[4].data, test[4].data_len)) {
+    if (HMAC_Update(ctx, test[4].data, test[4].data_len)) {
         printf("Should fail HMAC_Update with ctx not set up (test 4)\n");
         err++;
         goto test5;
     }
-    if (HMAC_Init_ex(&ctx, NULL, 0, EVP_sha1(), NULL)) {
+    if (HMAC_Init_ex(ctx, NULL, 0, EVP_sha1(), NULL)) {
         printf("Should fail to initialise HMAC with empty key (test 4)\n");
         err++;
         goto test5;
     }
-    if (HMAC_Update(&ctx, test[4].data, test[4].data_len)) {
+    if (HMAC_Update(ctx, test[4].data, test[4].data_len)) {
         printf("Should fail HMAC_Update with ctx not set up (test 4)\n");
         err++;
         goto test5;
     }
     printf("test 4 ok\n");
 test5:
-    HMAC_CTX_cleanup(&ctx);
-    HMAC_CTX_init(&ctx);
-    if (HMAC_Init_ex(&ctx, test[4].key, test[4].key_len, NULL, NULL)) {
+    /* Test 5 has empty key; test that single-shot accepts a NULL key. */
+    p = pt(HMAC(EVP_sha1(), NULL, 0, test[4].data, test[4].data_len,
+                NULL, NULL), SHA_DIGEST_LENGTH);
+    if (strcmp(p, (char *)test[4].digest) != 0) {
+        printf("Error calculating HMAC on %d entry'\n", i);
+        printf("got %s instead of %s\n", p, test[4].digest);
+        err++;
+    }
+
+    HMAC_CTX_reset(ctx);
+    if (HMAC_CTX_get_md(ctx) != NULL) {
+        printf("Message digest not NULL for HMAC (test 5)\n");
+        err++;
+        goto test6;
+    }
+    if (HMAC_Init_ex(ctx, test[4].key, test[4].key_len, NULL, NULL)) {
         printf("Should fail to initialise HMAC with empty MD (test 5)\n");
         err++;
         goto test6;
     }
-    if (HMAC_Update(&ctx, test[4].data, test[4].data_len)) {
+    if (HMAC_Update(ctx, test[4].data, test[4].data_len)) {
         printf("Should fail HMAC_Update with ctx not set up (test 5)\n");
         err++;
         goto test6;
     }
-    if (HMAC_Init_ex(&ctx, test[4].key, -1, EVP_sha1(), NULL)) {
+    if (HMAC_Init_ex(ctx, test[4].key, -1, EVP_sha1(), NULL)) {
         printf("Should fail to initialise HMAC with invalid key len(test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Init_ex(&ctx, test[4].key, test[4].key_len, EVP_sha1(), NULL)) {
+    if (!HMAC_Init_ex(ctx, test[4].key, test[4].key_len, EVP_sha1(), NULL)) {
         printf("Failed to initialise HMAC (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Update(&ctx, test[4].data, test[4].data_len)) {
+    if (!HMAC_Update(ctx, test[4].data, test[4].data_len)) {
         printf("Error updating HMAC with data (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Final(&ctx, buf, &len)) {
+    if (!HMAC_Final(ctx, buf, &len)) {
         printf("Error finalising data (test 5)\n");
         err++;
         goto test6;
@@ -227,22 +202,27 @@ test5:
         err++;
         goto test6;
     }
-    if (HMAC_Init_ex(&ctx, NULL, 0, EVP_sha256(), NULL)) {
+    if (HMAC_Init_ex(ctx, NULL, 0, EVP_sha256(), NULL)) {
         printf("Should disallow changing MD without a new key (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Init_ex(&ctx, test[4].key, test[4].key_len, EVP_sha256(), NULL)) {
+    if (!HMAC_Init_ex(ctx, test[5].key, test[5].key_len, EVP_sha256(), NULL)) {
         printf("Failed to reinitialise HMAC (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Update(&ctx, test[5].data, test[5].data_len)) {
+    if (HMAC_CTX_get_md(ctx) != EVP_sha256()) {
+        printf("Unexpected message digest for HMAC (test 5)\n");
+        err++;
+        goto test6;
+    }
+    if (!HMAC_Update(ctx, test[5].data, test[5].data_len)) {
         printf("Error updating HMAC with data (sha256) (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Final(&ctx, buf, &len)) {
+    if (!HMAC_Final(ctx, buf, &len)) {
         printf("Error finalising data (sha256) (test 5)\n");
         err++;
         goto test6;
@@ -254,17 +234,17 @@ test5:
         err++;
         goto test6;
     }
-    if (!HMAC_Init_ex(&ctx, test[6].key, test[6].key_len, NULL, NULL)) {
+    if (!HMAC_Init_ex(ctx, test[6].key, test[6].key_len, NULL, NULL)) {
         printf("Failed to reinitialise HMAC with key (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Update(&ctx, test[6].data, test[6].data_len)) {
+    if (!HMAC_Update(ctx, test[6].data, test[6].data_len)) {
         printf("Error updating HMAC with data (new key) (test 5)\n");
         err++;
         goto test6;
     }
-    if (!HMAC_Final(&ctx, buf, &len)) {
+    if (!HMAC_Final(ctx, buf, &len)) {
         printf("Error finalising data (new key) (test 5)\n");
         err++;
         goto test6;
@@ -278,24 +258,29 @@ test5:
         printf("test 5 ok\n");
     }
 test6:
-    HMAC_CTX_cleanup(&ctx);
-    HMAC_CTX_init(&ctx);
-    if (!HMAC_Init_ex(&ctx, test[7].key, test[7].key_len, EVP_sha1(), NULL)) {
+    HMAC_CTX_reset(ctx);
+    ctx2 = HMAC_CTX_new();
+    if (ctx2 == NULL) {
+        printf("HMAC malloc failure (test 6)\n");
+        err++;
+        goto end;
+    }
+    if (!HMAC_Init_ex(ctx, test[7].key, test[7].key_len, EVP_sha1(), NULL)) {
         printf("Failed to initialise HMAC (test 6)\n");
         err++;
         goto end;
     }
-    if (!HMAC_Update(&ctx, test[7].data, test[7].data_len)) {
+    if (!HMAC_Update(ctx, test[7].data, test[7].data_len)) {
         printf("Error updating HMAC with data (test 6)\n");
         err++;
         goto end;
     }
-    if (!HMAC_CTX_copy(&ctx2, &ctx)) {
+    if (!HMAC_CTX_copy(ctx2, ctx)) {
         printf("Failed to copy HMAC_CTX (test 6)\n");
         err++;
         goto end;
     }
-    if (!HMAC_Final(&ctx2, buf, &len)) {
+    if (!HMAC_Final(ctx2, buf, &len)) {
         printf("Error finalising data (test 6)\n");
         err++;
         goto end;
@@ -309,7 +294,8 @@ test6:
         printf("test 6 ok\n");
     }
 end:
-    HMAC_CTX_cleanup(&ctx);
+    HMAC_CTX_free(ctx2);
+    HMAC_CTX_free(ctx);
     EXIT(err);
 }
 

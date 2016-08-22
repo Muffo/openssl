@@ -1,3 +1,12 @@
+/*
+ * Copyright 2012-2016 The OpenSSL Project Authors. All Rights Reserved.
+ *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
+ */
+
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 #include "../e_os.h"
@@ -6,12 +15,16 @@
 static const char *const names[] = {
     "a", "b", ".", "*", "@",
     ".a", "a.", ".b", "b.", ".*", "*.", "*@", "@*", "a@", "@a", "b@", "..",
+    "-example.com", "example-.com",
     "@@", "**", "*.com", "*com", "*.*.com", "*com", "com*", "*example.com",
     "*@example.com", "test@*.example.com", "example.com", "www.example.com",
     "test.www.example.com", "*.example.com", "*.www.example.com",
     "test.*.example.com", "www.*.com",
     ".www.example.com", "*www.example.com",
     "example.net", "xn--rger-koa.example.com",
+    "*.xn--rger-koa.example.com", "www.xn--rger-koa.example.com",
+    "*.good--example.com", "www.good--example.com",
+    "*.xn--bar.com", "xn--foo.xn--bar.com",
     "a.example.com", "b.example.com",
     "postmaster@example.com", "Postmaster@example.com",
     "postmaster@EXAMPLE.COM",
@@ -27,6 +40,9 @@ static const char *const exceptions[] = {
     "set CN: host: [*.www.example.com] matches [.www.example.com]",
     "set CN: host: [*www.example.com] matches [www.example.com]",
     "set CN: host: [test.www.example.com] matches [.www.example.com]",
+    "set CN: host: [*.xn--rger-koa.example.com] matches [www.xn--rger-koa.example.com]",
+    "set CN: host: [*.xn--bar.com] matches [xn--foo.xn--bar.com]",
+    "set CN: host: [*.good--example.com] matches [www.good--example.com]",
     "set CN: host-no-wildcards: [*.www.example.com] matches [.www.example.com]",
     "set CN: host-no-wildcards: [test.www.example.com] matches [.www.example.com]",
     "set emailAddress: email: [postmaster@example.com] does not match [Postmaster@example.com]",
@@ -43,6 +59,9 @@ static const char *const exceptions[] = {
     "set dnsName: host: [*.www.example.com] matches [.www.example.com]",
     "set dnsName: host: [*www.example.com] matches [www.example.com]",
     "set dnsName: host: [test.www.example.com] matches [.www.example.com]",
+    "set dnsName: host: [*.xn--rger-koa.example.com] matches [www.xn--rger-koa.example.com]",
+    "set dnsName: host: [*.xn--bar.com] matches [xn--foo.xn--bar.com]",
+    "set dnsName: host: [*.good--example.com] matches [www.good--example.com]",
     "set rfc822Name: email: [postmaster@example.com] does not match [Postmaster@example.com]",
     "set rfc822Name: email: [Postmaster@example.com] does not match [postmaster@example.com]",
     "set rfc822Name: email: [Postmaster@example.com] does not match [postmaster@EXAMPLE.COM]",

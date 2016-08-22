@@ -1,60 +1,12 @@
-/* crypto/bn/bntest.c */
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
+
 /* ====================================================================
  * Copyright 2002 Sun Microsystems, Inc. ALL RIGHTS RESERVED.
  *
@@ -80,6 +32,20 @@
 #include <openssl/rand.h>
 #include <openssl/x509.h>
 #include <openssl/err.h>
+
+/*
+ * In bn_lcl.h, bn_expand() is defined as a static ossl_inline function.
+ * This is fine in itself, it will end up as an unused static function in
+ * the worst case.  However, it referenses bn_expand2(), which is a private
+ * function in libcrypto and therefore unavailable on some systems.  This
+ * may result in a linker error because of unresolved symbols.
+ *
+ * To avoid this, we define a dummy variant of bn_expand2() here, and to
+ * avoid possible clashes with libcrypto, we rename it first, using a macro.
+ */
+#define bn_expand2 dummy_bn_expand2
+BIGNUM *bn_expand2(BIGNUM *b, int words);
+BIGNUM *bn_expand2(BIGNUM *b, int words) { return NULL; }
 
 #include "../crypto/bn/bn_lcl.h"
 
@@ -117,7 +83,6 @@ int test_gf2m_mod_solve_quad(BIO *bp, BN_CTX *ctx);
 int test_kron(BIO *bp, BN_CTX *ctx);
 int test_sqrt(BIO *bp, BN_CTX *ctx);
 int test_small_prime(BIO *bp, BN_CTX *ctx);
-int test_probable_prime_coprime(BIO *bp, BN_CTX *ctx);
 int rand_neg(void);
 static int results = 0;
 
@@ -141,6 +106,9 @@ int main(int argc, char *argv[])
     BN_CTX *ctx;
     BIO *out;
     char *outfile = NULL;
+
+    CRYPTO_set_mem_debug(1);
+    CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
 
     results = 0;
 
@@ -292,15 +260,6 @@ int main(int argc, char *argv[])
         goto err;
     (void)BIO_flush(out);
 
-#ifdef OPENSSL_SYS_WIN32
-    message(out, "Probable prime generation with coprimes disabled");
-#else
-    message(out, "Probable prime generation with coprimes");
-    if (!test_probable_prime_coprime(out, ctx))
-        goto err;
-#endif
-    (void)BIO_flush(out);
-
 #ifndef OPENSSL_NO_EC2M
     message(out, "BN_GF2m_add");
     if (!test_gf2m_add(out))
@@ -350,13 +309,21 @@ int main(int argc, char *argv[])
     BN_CTX_free(ctx);
     BIO_free(out);
 
+    ERR_print_errors_fp(stderr);
+
+#ifndef OPENSSL_NO_CRYPTO_MDEBUG
+    if (CRYPTO_mem_leaks_fp(stderr) <= 0)
+        EXIT(1);
+#endif
     EXIT(0);
  err:
     BIO_puts(out, "1\n");       /* make sure the Perl script fed by bc
                                  * notices the failure, see test_bn in
                                  * test/Makefile.ssl */
     (void)BIO_flush(out);
-    ERR_load_crypto_strings();
+    BN_CTX_free(ctx);
+    BIO_free(out);
+
     ERR_print_errors_fp(stderr);
     EXIT(1);
 }
@@ -513,24 +480,31 @@ int test_div(BIO *bp, BN_CTX *ctx)
 
 static void print_word(BIO *bp, BN_ULONG w)
 {
-#ifdef SIXTY_FOUR_BIT
-    if (sizeof(w) > sizeof(unsigned long)) {
-        unsigned long h = (unsigned long)(w >> 32), l = (unsigned long)(w);
+    int i = sizeof(w) * 8;
+    char *fmt = NULL;
+    unsigned char byte;
 
-        if (h)
-            BIO_printf(bp, "%lX%08lX", h, l);
+    do {
+        i -= 8;
+        byte = (unsigned char)(w >> i);
+        if (fmt == NULL)
+            fmt = byte ? "%X" : NULL;
         else
-            BIO_printf(bp, "%lX", l);
-        return;
-    }
-#endif
-    BIO_printf(bp, BN_HEX_FMT1, w);
+            fmt = "%02X";
+
+        if (fmt != NULL)
+            BIO_printf(bp, fmt, byte);
+    } while (i);
+
+    /* If we haven't printed anything, at least print a zero! */
+    if (fmt == NULL)
+        BIO_printf(bp, "0");
 }
 
 int test_div_word(BIO *bp)
 {
     BIGNUM *a, *b;
-    BN_ULONG r, s;
+    BN_ULONG r, rmod, s;
     int i;
 
     a = BN_new();
@@ -544,7 +518,13 @@ int test_div_word(BIO *bp)
 
         s = b->d[0];
         BN_copy(b, a);
+        rmod = BN_mod_word(b, s);
         r = BN_div_word(b, s);
+
+        if (rmod != r) {
+            fprintf(stderr, "Mod (word) test failed!\n");
+            return 0;
+        }
 
         if (bp != NULL) {
             if (!results) {
@@ -1240,7 +1220,7 @@ int test_gf2m_add(BIO *bp)
     c = BN_new();
 
     for (i = 0; i < num0; i++) {
-        BN_rand(a, 512, 0, 0);
+        BN_rand(a, 512, BN_RAND_TOP_ONE, BN_RAND_BOTTOM_ANY);
         BN_copy(b, BN_value_one());
         a->neg = rand_neg();
         b->neg = rand_neg();
@@ -1859,37 +1839,6 @@ int test_small_prime(BIO *bp, BN_CTX *ctx)
     return ret;
 }
 
-#ifndef OPENSSL_SYS_WIN32
-int test_probable_prime_coprime(BIO *bp, BN_CTX *ctx)
-{
-    int i, j, ret = 0;
-    BIGNUM *r;
-    BN_ULONG primes[5] = { 2, 3, 5, 7, 11 };
-
-    r = BN_new();
-
-    for (i = 0; i < 1000; i++) {
-        if (!bn_probable_prime_dh_coprime(r, 1024, ctx))
-            goto err;
-
-        for (j = 0; j < 5; j++) {
-            if (BN_mod_word(r, primes[j]) == 0) {
-                BIO_printf(bp, "Number generated is not coprime to "
-			   BN_DEC_FMT1 ":\n", primes[j]);
-                BN_print_fp(stdout, r);
-                BIO_printf(bp, "\n");
-                goto err;
-            }
-        }
-    }
-
-    ret = 1;
-
- err:
-    BN_clear_free(r);
-    return ret;
-}
-#endif
 int test_lshift(BIO *bp, BN_CTX *ctx, BIGNUM *a_)
 {
     BIGNUM *a, *b, *c, *d;

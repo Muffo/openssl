@@ -1,69 +1,10 @@
-/* Copyright (c) 2014, Google Inc.
+/*
+ * Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * Permission to use, copy, modify, and/or distribute this software for any
- * purpose with or without fee is hereby granted, provided that the above
- * copyright notice and this permission notice appear in all copies.
- *
- * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
- * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
- * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
- * SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
- * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
- * OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
- * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
- */
-/* ====================================================================
- * Copyright (c) 1998-2015 The OpenSSL Project.  All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in
- *    the documentation and/or other materials provided with the
- *    distribution.
- *
- * 3. All advertising materials mentioning features or use of this
- *    software must display the following acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
- *
- * 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
- *    endorse or promote products derived from this software without
- *    prior written permission. For written permission, please contact
- *    openssl-core@openssl.org.
- *
- * 5. Products derived from this software may not be called "OpenSSL"
- *    nor may "OpenSSL" appear in their names without prior written
- *    permission of the OpenSSL Project.
- *
- * 6. Redistributions of any form whatsoever must retain the following
- *    acknowledgment:
- *    "This product includes software developed by the OpenSSL Project
- *    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
- *
- * THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
- * EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
- * ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
- * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
- * OF THE POSSIBILITY OF SUCH DAMAGE.
- * ====================================================================
- *
- * This product includes cryptographic software written by Eric Young
- * (eay@cryptsoft.com).  This product includes software written by Tim
- * Hudson (tjh@cryptsoft.com).
- *
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
@@ -277,19 +218,21 @@ static int test_EVP_DigestSignInit(void)
     EVP_PKEY *pkey = NULL;
     unsigned char *sig = NULL;
     size_t sig_len = 0;
-    EVP_MD_CTX md_ctx, md_ctx_verify;
+    EVP_MD_CTX *md_ctx, *md_ctx_verify;
 
-    EVP_MD_CTX_init(&md_ctx);
-    EVP_MD_CTX_init(&md_ctx_verify);
+    md_ctx = EVP_MD_CTX_new();
+    md_ctx_verify = EVP_MD_CTX_new();
+    if (md_ctx == NULL || md_ctx_verify == NULL)
+        goto out;
 
     pkey = load_example_rsa_key();
     if (pkey == NULL ||
-        !EVP_DigestSignInit(&md_ctx, NULL, EVP_sha256(), NULL, pkey) ||
-        !EVP_DigestSignUpdate(&md_ctx, kMsg, sizeof(kMsg))) {
+        !EVP_DigestSignInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) ||
+        !EVP_DigestSignUpdate(md_ctx, kMsg, sizeof(kMsg))) {
         goto out;
     }
     /* Determine the size of the signature. */
-    if (!EVP_DigestSignFinal(&md_ctx, NULL, &sig_len)) {
+    if (!EVP_DigestSignFinal(md_ctx, NULL, &sig_len)) {
         goto out;
     }
     /* Sanity check for testing. */
@@ -299,14 +242,14 @@ static int test_EVP_DigestSignInit(void)
     }
 
     sig = OPENSSL_malloc(sig_len);
-    if (sig == NULL || !EVP_DigestSignFinal(&md_ctx, sig, &sig_len)) {
+    if (sig == NULL || !EVP_DigestSignFinal(md_ctx, sig, &sig_len)) {
         goto out;
     }
 
     /* Ensure that the signature round-trips. */
-    if (!EVP_DigestVerifyInit(&md_ctx_verify, NULL, EVP_sha256(), NULL, pkey)
-        || !EVP_DigestVerifyUpdate(&md_ctx_verify, kMsg, sizeof(kMsg))
-        || !EVP_DigestVerifyFinal(&md_ctx_verify, sig, sig_len)) {
+    if (!EVP_DigestVerifyInit(md_ctx_verify, NULL, EVP_sha256(), NULL, pkey)
+        || !EVP_DigestVerifyUpdate(md_ctx_verify, kMsg, sizeof(kMsg))
+        || !EVP_DigestVerifyFinal(md_ctx_verify, sig, sig_len)) {
         goto out;
     }
 
@@ -317,8 +260,8 @@ static int test_EVP_DigestSignInit(void)
         ERR_print_errors_fp(stderr);
     }
 
-    EVP_MD_CTX_cleanup(&md_ctx);
-    EVP_MD_CTX_cleanup(&md_ctx_verify);
+    EVP_MD_CTX_free(md_ctx);
+    EVP_MD_CTX_free(md_ctx_verify);
     EVP_PKEY_free(pkey);
     OPENSSL_free(sig);
 
@@ -329,15 +272,15 @@ static int test_EVP_DigestVerifyInit(void)
 {
     int ret = 0;
     EVP_PKEY *pkey = NULL;
-    EVP_MD_CTX md_ctx;
+    EVP_MD_CTX *md_ctx;
 
-    EVP_MD_CTX_init(&md_ctx);
+    md_ctx = EVP_MD_CTX_new();
 
     pkey = load_example_rsa_key();
     if (pkey == NULL ||
-        !EVP_DigestVerifyInit(&md_ctx, NULL, EVP_sha256(), NULL, pkey) ||
-        !EVP_DigestVerifyUpdate(&md_ctx, kMsg, sizeof(kMsg)) ||
-        !EVP_DigestVerifyFinal(&md_ctx, kSignature, sizeof(kSignature))) {
+        !EVP_DigestVerifyInit(md_ctx, NULL, EVP_sha256(), NULL, pkey) ||
+        !EVP_DigestVerifyUpdate(md_ctx, kMsg, sizeof(kMsg)) ||
+        !EVP_DigestVerifyFinal(md_ctx, kSignature, sizeof(kSignature))) {
         goto out;
     }
     ret = 1;
@@ -347,7 +290,7 @@ static int test_EVP_DigestVerifyInit(void)
         ERR_print_errors_fp(stderr);
     }
 
-    EVP_MD_CTX_cleanup(&md_ctx);
+    EVP_MD_CTX_free(md_ctx);
     EVP_PKEY_free(pkey);
 
     return ret;
@@ -417,14 +360,9 @@ static int test_EVP_PKCS82PKEY(void)
 
 int main(void)
 {
-    CRYPTO_malloc_debug_init();
-    CRYPTO_set_mem_debug_options(V_CRYPTO_MDEBUG_ALL);
+    CRYPTO_set_mem_debug(1);
     CRYPTO_mem_ctrl(CRYPTO_MEM_CHECK_ON);
 
-    ERR_load_crypto_strings();
-    /* Load up the software EVP_CIPHER and EVP_MD definitions */
-    OpenSSL_add_all_ciphers();
-    OpenSSL_add_all_digests();
 
     if (!test_EVP_DigestSignInit()) {
         fprintf(stderr, "EVP_DigestSignInit failed\n");
@@ -461,11 +399,10 @@ int main(void)
     }
 #endif
 
-    EVP_cleanup();
-    CRYPTO_cleanup_all_ex_data();
-    ERR_remove_thread_state(NULL);
-    ERR_free_strings();
-    CRYPTO_mem_leaks_fp(stderr);
+#ifndef OPENSSL_NO_CRYPTO_MDEBUG
+    if (CRYPTO_mem_leaks_fp(stderr) <= 0)
+        return 1;
+#endif
 
     printf("PASS\n");
     return 0;

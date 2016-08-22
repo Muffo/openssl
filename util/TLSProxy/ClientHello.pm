@@ -1,66 +1,16 @@
-# Written by Matt Caswell for the OpenSSL project.
-# ====================================================================
-# Copyright (c) 1998-2015 The OpenSSL Project.  All rights reserved.
+# Copyright 2016 The OpenSSL Project Authors. All Rights Reserved.
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in
-#    the documentation and/or other materials provided with the
-#    distribution.
-#
-# 3. All advertising materials mentioning features or use of this
-#    software must display the following acknowledgment:
-#    "This product includes software developed by the OpenSSL Project
-#    for use in the OpenSSL Toolkit. (http://www.openssl.org/)"
-#
-# 4. The names "OpenSSL Toolkit" and "OpenSSL Project" must not be used to
-#    endorse or promote products derived from this software without
-#    prior written permission. For written permission, please contact
-#    openssl-core@openssl.org.
-#
-# 5. Products derived from this software may not be called "OpenSSL"
-#    nor may "OpenSSL" appear in their names without prior written
-#    permission of the OpenSSL Project.
-#
-# 6. Redistributions of any form whatsoever must retain the following
-#    acknowledgment:
-#    "This product includes software developed by the OpenSSL Project
-#    for use in the OpenSSL Toolkit (http://www.openssl.org/)"
-#
-# THIS SOFTWARE IS PROVIDED BY THE OpenSSL PROJECT ``AS IS'' AND ANY
-# EXPRESSED OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE OpenSSL PROJECT OR
-# ITS CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
-# NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-# HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-# STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-# ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
-# OF THE POSSIBILITY OF SUCH DAMAGE.
-# ====================================================================
-#
-# This product includes cryptographic software written by Eric Young
-# (eay@cryptsoft.com).  This product includes software written by Tim
-# Hudson (tjh@cryptsoft.com).
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
 
 use strict;
 
 package TLSProxy::ClientHello;
 
-use parent 'TLSProxy::Message';
-
-use constant {
-    EXT_ENCRYPT_THEN_MAC => 22,
-    EXT_SESSION_TICKET => 35
-};
+use vars '@ISA';
+push @ISA, 'TLSProxy::Message';
 
 sub new
 {
@@ -70,7 +20,7 @@ sub new
         $records,
         $startoffset,
         $message_frag_lens) = @_;
-    
+
     my $self = $class->SUPER::new(
         $server,
         1,
@@ -88,7 +38,7 @@ sub new
     $self->{comp_meth_len} = 0;
     $self->{comp_meths} = [];
     $self->{extensions_len} = 0;
-    $self->{extensions_data} = "";
+    $self->{extension_data} = "";
 
     return $self;
 }
@@ -118,7 +68,7 @@ sub parse
     #For now we just deal with this as a block of data. In the future we will
     #want to parse this
     my $extension_data = substr($self->data, $ptr);
-    
+
     if (length($extension_data) != $extensions_len) {
         die "Invalid extension length\n";
     }
@@ -159,7 +109,7 @@ sub process_extensions
     #Clear any state from a previous run
     TLSProxy::Record->etm(0);
 
-    if (exists $extensions{&EXT_ENCRYPT_THEN_MAC}) {
+    if (exists $extensions{TLSProxy::Message::EXT_ENCRYPT_THEN_MAC}) {
         TLSProxy::Record->etm(1);
     }
 }
@@ -169,6 +119,7 @@ sub set_message_contents
 {
     my $self = shift;
     my $data;
+    my $extensions = "";
 
     $data = pack('n', $self->client_version);
     $data .= $self->random;
@@ -178,13 +129,21 @@ sub set_message_contents
     $data .= pack("n*", @{$self->ciphersuites});
     $data .= pack('C', $self->comp_meth_len);
     $data .= pack("C*", @{$self->comp_meths});
-    $data .= pack('n', $self->extensions_len);
+
     foreach my $key (keys %{$self->extension_data}) {
         my $extdata = ${$self->extension_data}{$key};
-        $data .= pack("n", $key);
-        $data .= pack("n", length($extdata));
-        $data .= $extdata;
+        $extensions .= pack("n", $key);
+        $extensions .= pack("n", length($extdata));
+        $extensions .= $extdata;
+        if ($key == TLSProxy::Message::EXT_DUPLICATE_EXTENSION) {
+          $extensions .= pack("n", $key);
+          $extensions .= pack("n", length($extdata));
+          $extensions .= $extdata;
+        }
     }
+
+    $data .= pack('n', length($extensions));
+    $data .= $extensions;
 
     $self->data($data);
 }
@@ -269,5 +228,15 @@ sub extension_data
       $self->{extension_data} = shift;
     }
     return $self->{extension_data};
+}
+sub set_extension
+{
+    my ($self, $ext_type, $ext_data) = @_;
+    $self->{extension_data}{$ext_type} = $ext_data;
+}
+sub delete_extension
+{
+    my ($self, $ext_type) = @_;
+    delete $self->{extension_data}{$ext_type};
 }
 1;

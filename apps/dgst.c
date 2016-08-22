@@ -1,58 +1,10 @@
-/* Copyright (C) 1995-1998 Eric Young (eay@cryptsoft.com)
- * All rights reserved.
+/*
+ * Copyright 1995-2016 The OpenSSL Project Authors. All Rights Reserved.
  *
- * This package is an SSL implementation written
- * by Eric Young (eay@cryptsoft.com).
- * The implementation was written so as to conform with Netscapes SSL.
- *
- * This library is free for commercial and non-commercial use as long as
- * the following conditions are aheared to.  The following conditions
- * apply to all code found in this distribution, be it the RC4, RSA,
- * lhash, DES, etc., code; not just the SSL code.  The SSL documentation
- * included with this distribution is covered by the same copyright terms
- * except that the holder is Tim Hudson (tjh@cryptsoft.com).
- *
- * Copyright remains Eric Young's, and as such any Copyright notices in
- * the code are not to be removed.
- * If this package is used in a product, Eric Young should be given attribution
- * as the author of the parts of the library used.
- * This can be in the form of a textual message at program startup or
- * in documentation (online or textual) provided with the package.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *    "This product includes cryptographic software written by
- *     Eric Young (eay@cryptsoft.com)"
- *    The word 'cryptographic' can be left out if the rouines from the library
- *    being used are not cryptographic related :-).
- * 4. If you include any Windows specific code (or a derivative thereof) from
- *    the apps directory (application code) you must include an acknowledgement:
- *    "This product includes software written by Tim Hudson (tjh@cryptsoft.com)"
- *
- * THIS SOFTWARE IS PROVIDED BY ERIC YOUNG ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * The licence and distribution terms for any publically available version or
- * derivative of this code cannot be changed.  i.e. this code cannot simply be
- * copied and put under another distribution licence
- * [including the GNU Public Licence.]
+ * Licensed under the OpenSSL license (the "License").  You may not use
+ * this file except in compliance with the License.  You can obtain a copy
+ * in the file LICENSE in the source distribution or at
+ * https://www.openssl.org/source/license.html
  */
 
 #include <stdio.h>
@@ -73,14 +25,14 @@
 int do_fp(BIO *out, unsigned char *buf, BIO *bp, int sep, int binout,
           EVP_PKEY *key, unsigned char *sigin, int siglen,
           const char *sig_name, const char *md_name,
-          const char *file, BIO *bmd);
+          const char *file);
 
 typedef enum OPTION_choice {
     OPT_ERR = -1, OPT_EOF = 0, OPT_HELP,
     OPT_C, OPT_R, OPT_RAND, OPT_OUT, OPT_SIGN, OPT_PASSIN, OPT_VERIFY,
     OPT_PRVERIFY, OPT_SIGNATURE, OPT_KEYFORM, OPT_ENGINE, OPT_ENGINE_IMPL,
     OPT_HEX, OPT_BINARY, OPT_DEBUG, OPT_FIPS_FINGERPRINT,
-    OPT_NON_FIPS_ALLOW, OPT_HMAC, OPT_MAC, OPT_SIGOPT, OPT_MACOPT,
+    OPT_HMAC, OPT_MAC, OPT_SIGOPT, OPT_MACOPT,
     OPT_DIGEST
 } OPTION_CHOICE;
 
@@ -91,30 +43,32 @@ OPTIONS dgst_options[] = {
     {"help", OPT_HELP, '-', "Display this summary"},
     {"c", OPT_C, '-', "Print the digest with separating colons"},
     {"r", OPT_R, '-', "Print the digest in coreutils format"},
-    {"rand", OPT_RAND, 's'},
+    {"rand", OPT_RAND, 's',
+     "Use file(s) containing random data to seed RNG or an EGD sock"},
     {"out", OPT_OUT, '>', "Output to filename rather than stdout"},
-    {"passin", OPT_PASSIN, 's'},
-    {"sign", OPT_SIGN, '<', "Sign digest using private key in file"},
-    {"verify", OPT_VERIFY, '<',
-     "Verify a signature using public key in file"},
-    {"prverify", OPT_PRVERIFY, '<',
-     "Verify a signature using private key in file"},
+    {"passin", OPT_PASSIN, 's', "Input file pass phrase source"},
+    {"sign", OPT_SIGN, 's', "Sign digest using private key"},
+    {"verify", OPT_VERIFY, 's',
+     "Verify a signature using public key"},
+    {"prverify", OPT_PRVERIFY, 's',
+     "Verify a signature using private key"},
     {"signature", OPT_SIGNATURE, '<', "File with signature to verify"},
     {"keyform", OPT_KEYFORM, 'f', "Key file format (PEM or ENGINE)"},
     {"hex", OPT_HEX, '-', "Print as hex dump"},
     {"binary", OPT_BINARY, '-', "Print in binary form"},
     {"d", OPT_DEBUG, '-', "Print debug info"},
-    {"debug", OPT_DEBUG, '-'},
-    {"fips-fingerprint", OPT_FIPS_FINGERPRINT, '-'},
-    {"non-fips-allow", OPT_NON_FIPS_ALLOW, '-'},
+    {"debug", OPT_DEBUG, '-', "Print debug info"},
+    {"fips-fingerprint", OPT_FIPS_FINGERPRINT, '-',
+     "Compute HMAC with the key used in OpenSSL-FIPS fingerprint"},
     {"hmac", OPT_HMAC, 's', "Create hashed MAC with key"},
-    {"mac", OPT_MAC, 's', "Create MAC (not neccessarily HMAC)"},
+    {"mac", OPT_MAC, 's', "Create MAC (not necessarily HMAC)"},
     {"sigopt", OPT_SIGOPT, 's', "Signature parameter in n:v form"},
     {"macopt", OPT_MACOPT, 's', "MAC algorithm parameters in n:v form or key"},
     {"", OPT_DIGEST, '-', "Any supported digest"},
 #ifndef OPENSSL_NO_ENGINE
     {"engine", OPT_ENGINE, 's', "Use engine e, possibly a hardware device"},
-    {"engine_impl", OPT_ENGINE_IMPL, '-'},
+    {"engine_impl", OPT_ENGINE_IMPL, '-',
+     "Also use engine given by -engine for digest operations"},
 #endif
     {NULL}
 };
@@ -133,8 +87,7 @@ int dgst_main(int argc, char **argv)
     const char *sigfile = NULL, *randfile = NULL;
     OPTION_CHOICE o;
     int separator = 0, debug = 0, keyform = FORMAT_PEM, siglen = 0;
-    int i, ret = 1, out_bin = -1, want_pub = 0, do_verify =
-        0, non_fips_allow = 0;
+    int i, ret = 1, out_bin = -1, want_pub = 0, do_verify = 0;
     unsigned char *buf = NULL, *sigbuf = NULL;
     int engine_impl = 0;
 
@@ -204,9 +157,6 @@ int dgst_main(int argc, char **argv)
             break;
         case OPT_FIPS_FINGERPRINT:
             hmac_key = "etaonrishdlcupfm";
-            break;
-        case OPT_NON_FIPS_ALLOW:
-            non_fips_allow = 1;
             break;
         case OPT_HMAC:
             hmac_key = opt_arg();
@@ -323,12 +273,6 @@ int dgst_main(int argc, char **argv)
             goto end;
     }
 
-    if (non_fips_allow) {
-        EVP_MD_CTX *md_ctx;
-        BIO_get_md_ctx(bmd, &md_ctx);
-        EVP_MD_CTX_set_flags(md_ctx, EVP_MD_CTX_FLAG_NON_FIPS_ALLOW);
-    }
-
     if (hmac_key) {
         sigkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, impl,
                                       (unsigned char *)hmac_key, -1);
@@ -375,7 +319,7 @@ int dgst_main(int argc, char **argv)
             goto end;
         }
         if (md == NULL)
-            md = EVP_md5();
+            md = EVP_sha256();
         if (!EVP_DigestInit_ex(mctx, md, impl)) {
             BIO_printf(bio_err, "Error setting digest\n");
             ERR_print_errors(bio_err);
@@ -411,7 +355,7 @@ int dgst_main(int argc, char **argv)
     if (argc == 0) {
         BIO_set_fp(in, stdin, BIO_NOCLOSE);
         ret = do_fp(out, buf, inp, separator, out_bin, sigkey, sigbuf,
-                    siglen, NULL, NULL, "stdin", bmd);
+                    siglen, NULL, NULL, "stdin");
     } else {
         const char *md_name = NULL, *sig_name = NULL;
         if (!out_bin) {
@@ -434,7 +378,7 @@ int dgst_main(int argc, char **argv)
                 continue;
             } else
                 r = do_fp(out, buf, inp, separator, out_bin, sigkey, sigbuf,
-                          siglen, sig_name, md_name, argv[i], bmd);
+                          siglen, sig_name, md_name, argv[i]);
             if (r)
                 ret = r;
             (void)BIO_reset(bmd);
@@ -456,7 +400,7 @@ int dgst_main(int argc, char **argv)
 int do_fp(BIO *out, unsigned char *buf, BIO *bp, int sep, int binout,
           EVP_PKEY *key, unsigned char *sigin, int siglen,
           const char *sig_name, const char *md_name,
-          const char *file, BIO *bmd)
+          const char *file)
 {
     size_t len;
     int i;

@@ -1,54 +1,59 @@
-#! /usr/bin/perl
+#! /usr/bin/env perl
+# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 
 use strict;
 use warnings;
 
 use POSIX;
-use File::Spec::Functions qw/splitdir curdir catfile devnull/;
-use File::Path 2.00 qw/remove_tree/;
-use OpenSSL::Test qw/:DEFAULT cmdstr top_file quotify/;
+use File::Path 2.00 qw/rmtree/;
+use OpenSSL::Test qw/:DEFAULT cmdstr srctop_file/;
 
 setup("test_ca");
 
-my $perl = $^X;
-$ENV{OPENSSL} = cmdstr(app(["openssl"]));
-my $CA_pl = top_file("apps", "CA.pl");
-my $std_openssl_cnf = top_file("apps", "openssl.cnf");
+$ENV{OPENSSL} = cmdstr(app(["openssl"]), display => 1);
+my $std_openssl_cnf =
+    srctop_file("apps", $^O eq "VMS" ? "openssl-vms.cnf" : "openssl.cnf");
 
-($perl) = quotify($perl) unless $^O eq "VMS"; # never quotify a command on VMS. Ever!
-
-remove_tree("demoCA", { safe => 0 });
+rmtree("demoCA", { safe => 0 });
 
 plan tests => 4;
  SKIP: {
-     $ENV{OPENSSL_CONFIG} = "-config ".top_file("test", "CAss.cnf");
+     $ENV{OPENSSL_CONFIG} = '-config "'.srctop_file("test", "CAss.cnf").'"';
      skip "failed creating CA structure", 3
-	 if !is(system("$perl ".$CA_pl." -newca < ".devnull()." 2>&1"), 0,
+	 if !ok(run(perlapp(["CA.pl","-newca"], stdin => undef)),
 		'creating CA structure');
 
-     $ENV{OPENSSL_CONFIG} = "-config ".top_file("test", "Uss.cnf");
+     $ENV{OPENSSL_CONFIG} = '-config "'.srctop_file("test", "Uss.cnf").'"';
      skip "failed creating new certificate request", 2
-	 if !is(system("$perl ".$CA_pl." -newreq 2>&1"), 0,
-		'creating new certificate request');
+	 if !ok(run(perlapp(["CA.pl","-newreq"])),
+		'creating CA structure');
 
-     $ENV{OPENSSL_CONFIG} = "-config ".$std_openssl_cnf;
+     $ENV{OPENSSL_CONFIG} = '-config "'.$std_openssl_cnf.'"';
      skip "failed to sign certificate request", 1
-	 if !is(yes("$perl ".$CA_pl." -sign 2>&1"), 0,
+	 if !is(yes(cmdstr(perlapp(["CA.pl", "-sign"]))), 0,
 		'signing certificate request');
 
-     is(system("$perl ".$CA_pl." -verify newcert.pem 2>&1"), 0,
+     ok(run(perlapp(["CA.pl", "-verify", "newcert.pem"])),
 	'verifying new certificate');
 }
 
 
-remove_tree("demoCA", { safe => 0 });
-unlink "newcert.pem", "newreq.pem";
+rmtree("demoCA", { safe => 0 });
+unlink "newcert.pem", "newreq.pem", "newkey.pem";
 
 
 sub yes {
+    my $cntr = 10;
     open(PIPE, "|-", join(" ",@_));
     local $SIG{PIPE} = "IGNORE";
-    1 while print PIPE "y\n";
+    1 while $cntr-- > 0 && print PIPE "y\n";
     close PIPE;
     return 0;
 }
+

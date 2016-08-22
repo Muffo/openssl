@@ -1,4 +1,11 @@
-#! /usr/bin/perl
+#! /usr/bin/env perl
+# Copyright 2015-2016 The OpenSSL Project Authors. All Rights Reserved.
+#
+# Licensed under the OpenSSL license (the "License").  You may not use
+# this file except in compliance with the License.  You can obtain a copy
+# in the file LICENSE in the source distribution or at
+# https://www.openssl.org/source/license.html
+
 
 use strict;
 use warnings;
@@ -6,11 +13,15 @@ use warnings;
 use POSIX;
 use File::Spec::Functions qw/devnull catfile/;
 use File::Copy;
-use OpenSSL::Test qw/:DEFAULT with pipe top_dir/;
+use OpenSSL::Test qw/:DEFAULT with pipe srctop_dir/;
+use OpenSSL::Test::Utils;
 
 setup("test_ocsp");
 
-my $ocspdir=top_dir("test", "ocsp-tests");
+plan skip_all => "OCSP is not supported by this OpenSSL build"
+    if disabled("ocsp");
+
+my $ocspdir=srctop_dir("test", "ocsp-tests");
 # 17 December 2012 so we don't get certificate expiry errors.
 my @check_time=("-attime", "1355875200");
 
@@ -20,15 +31,17 @@ sub test_ocsp {
     my $CAfile = shift;
     my $expected_exit = shift;
 
+    run(app(["openssl", "base64", "-d",
+             "-in", catfile($ocspdir,$inputfile),
+             "-out", "ocsp-resp-fff.dat"]));
     with({ exit_checker => sub { return shift == $expected_exit; } },
-	 sub { ok(run(pipe(app(["openssl", "base64", "-d",
-				"-in", catfile($ocspdir,$inputfile)]),
-			   app(["openssl", "ocsp", "-respin", "-",
-				"-partial_chain", @check_time,
-				"-CAfile", catfile($ocspdir, $CAfile),
-				"-verify_other", catfile($ocspdir, $CAfile),
-				"-no-CApath"]))),
-		  $title); });
+         sub { ok(run(app(["openssl", "ocsp", "-respin", "ocsp-resp-fff.dat",
+                           "-partial_chain", @check_time,
+                           "-CAfile", catfile($ocspdir, $CAfile),
+                           "-verify_other", catfile($ocspdir, $CAfile),
+                           "-no-CApath"])),
+                  $title); });
+    unlink "ocsp-resp-fff.dat";
 }
 
 plan tests => 10;
